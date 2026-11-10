@@ -14,6 +14,7 @@ Consultas del 2026-11-09. Cada entrada dice qué se tomó de la fuente y cómo s
 | 6 | wptrunner, `products.py` | ídem | Productos integrados en `BUILTIN_PRODUCTS`; carga `wptrunner.browsers.<nombre>` | Leído |
 | 7 | `tools/wpt/run.py` y `tools/wpt/browser.py` | ídem | Clase `BrowserSetup` por producto y tabla de productos; Firefox llama `install_prefs` (descarga) si falta `--prefs-root` y usa caché si existe `profiles.json` | Leído |
 | 8 | wptrunner, `executors/executorwebdriver.py` | ídem | Comandos WebDriver usados: url, ventana actual, handles, ventana nueva, cerrar ventana, execute sync/async, timeouts, actions release, window rect, screenshot | Leído |
+| 8b | Captura de la ventana raíz con libxcb (`xcb_get_image`, ZPixmap) | libxcb 1.17.0 | Ejecutado desde Python con ctypes: conexión, setup y petición funcionan; en XWayland sin raíz la raíz responde BadMatch (código 8), por eso la prueba de primer cuadro usa Xvfb |
 | 9 | wptrunner, `wptcommandline.py` | ídem | `--processes`, `--binary`, `--webdriver-binary`, `--headless`, `--no-manifest-update`, `--prefs-root`, `--include-file`, `--run-by-dir`; formateadores `wptreport` y `wptscreenshot` registrados como `--log-wptreport` | Leído |
 | 10 | Documentación de WPT, https://web-platform-tests.org/running-tests/from-local-system.html | vigente | `./wpt run`, `--log-wptreport`, `--processes`, hosts con `./wpt make-hosts-file` | Consultada (investigación adjunta) |
 | 11 | WPT, `tools/certs/cacert.pem` | ídem | CA de prueba: RSA 2048, `sha256WithRSAEncryption` → vidrio necesita RSA (PKCS#1 v1.5 y PSS) en TLS | Leído con `openssl x509 -text` |
@@ -28,13 +29,13 @@ Consultas del 2026-11-09. Cada entrada dice qué se tomó de la fuente y cómo s
 
 | # | Fuente | Versión fijada | Verificación |
 | --- | --- | --- | --- |
-| 18 | Firefox, paquete Arch `extra/firefox` | 159.0.1-1 | `pacman -Si` (no instalado; requiere sudo) |
-| 19 | geckodriver, paquete Arch `extra/geckodriver`; release https://github.com/mozilla/geckodriver/releases | 0.37.1-1 (último release v0.37.1) | `pacman -Si`; API de releases |
-| 20 | Chromium, paquete Arch `extra/chromium` (incluye `chromedriver`) | 156.0.8078.79-1 | `pacman -Si` |
+| 18 | Firefox, paquete Arch `extra/firefox` | 159.0.1-1; binario `/usr/bin/firefox` | `pacman -Si`; lista de archivos en https://archlinux.org/packages/extra/x86_64/firefox/files/ (no instalado; requiere sudo) |
+| 19 | geckodriver, paquete Arch `extra/geckodriver`; release https://github.com/mozilla/geckodriver/releases | 0.37.1-1 (último release v0.37.1); binario `/usr/bin/geckodriver` | `pacman -Si`; API de releases; lista de archivos en archlinux.org |
+| 20 | Chromium, paquete Arch `extra/chromium` (incluye `chromedriver`) | 156.0.8078.79-1; binarios `/usr/bin/chromium` y `/usr/bin/chromedriver` | `pacman -Si`; lista de archivos en archlinux.org |
 | 21 | Servo, https://github.com/servo/servo/releases/tag/v0.8.0 | 0.8.0; `servo-x86_64-linux-gnu.tar.gz` sha256 `02a78892746e69bc39d471da2bb012fd8ce228e464cda5a017334d0e88c61de1` | Ejecutado: `servoshell --version` → `Version: Servo 0.8.0-4e136d8ef`; `--help` muestra `--webdriver`, `--headless`, `--certificate-path`, `--ignore-certificate-errors`; `ldd` sin faltantes |
 | 22 | Boa, https://github.com/boa-dev/boa/releases/tag/v0.22 | 0.22.0; `boa-x86_64-unknown-linux-gnu` sha256 `d3484a63c9ee5f025de11379d055285a0bc015cf6d1d45b895e0d0f93566d671` | Ejecutado: `boa --version` → `boa 0.22.0`; `--help` muestra `--test262-object`, `--strict`, `-m/--module`, `--no-can-block`; `$262.createRealm` y `$262.agent` presentes |
 | 23 | Node, paquete Arch `nodejs` | 26.13.0-1 | Ejecutado: `node --version`; `--experimental-vm-modules` habilita `vm.SourceTextModule` |
-| 24 | Xvfb, paquete Arch `extra/xorg-server-xvfb` | 21.1.25-2 | `pacman -Si` (no instalado; requiere sudo) |
+| 24 | Xvfb, paquete Arch `extra/xorg-server-xvfb` | 21.1.25-2; binario `/usr/bin/Xvfb` | `pacman -Si`; lista de archivos en archlinux.org (no instalado; requiere sudo) |
 
 ## 3. Toolchain y sistema
 

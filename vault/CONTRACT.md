@@ -70,7 +70,7 @@ X11 con libxcb y MIT-SHM: el framebuffer se entrega con `xcb_shm_put_image`. `--
 ## 4. Integración con el arnés de WPT
 
 - vidrio trae un **servidor WebDriver propio** dentro del binario: `vidrio --webdriver=PUERTO [--headless] [--ca-cert=RUTA]`, igual que Servo. Resuelve los hosts de prueba con el archivo indicado en la variable `HOST_FILE` (formato `/etc/hosts`).
-- El módulo de producto `vidrio` se modela sobre `ladybird.py` y usa los ejecutores WebDriver genéricos de wptrunner: `WebDriverTestharnessExecutor` (testharness y test262), `WebDriverRefTestExecutor` y `WebDriverCrashtestExecutor`. El parche `bench/wpt/vidrio.patch` toca exactamente tres archivos: crea `tools/wptrunner/wptrunner/browsers/vidrio.py`, añade `"vidrio"` a `BUILTIN_PRODUCTS` en `tools/wptrunner/wptrunner/products.py` y añade la clase `Vidrio(BrowserSetup)` y su entrada en `tools/wpt/run.py`.
+- El módulo de producto `vidrio` se modela sobre `ladybird.py` y usa los ejecutores WebDriver genéricos de wptrunner: `WebDriverTestharnessExecutor` (testharness y test262), `WebDriverRefTestExecutor` y `WebDriverCrashtestExecutor`. El parche `bench/wpt/vidrio.patch` toca exactamente cuatro archivos, todos de registro del producto: crea `tools/wptrunner/wptrunner/browsers/vidrio.py`, añade `"vidrio"` a `BUILTIN_PRODUCTS` en `tools/wptrunner/wptrunner/products.py`, añade la clase `Vidrio(Browser)` en `tools/wpt/browser.py` y la clase `Vidrio(BrowserSetup)` con su entrada en la tabla de productos de `tools/wpt/run.py` (igual que Ladybird).
 - Subconjunto WebDriver (W3C WebDriver clásico, JSON sobre HTTP/1.1):
   - `GET /status`; `POST /session`; `DELETE /session/{id}`
   - `GET|POST /session/{id}/timeouts`
@@ -122,7 +122,7 @@ test262: `test/language`, `test/built-ins`, `test/annexB`. Fuera: `test/intl402`
 
 ### 5.4 Corredor de test262 (`bench/test262.py`)
 
-Propio, en Python con biblioteca estándar, el mismo para todos los motores. Aplica INTERPRETING.md: `assert.js` y `sta.js` más `includes`; `onlyStrict`, `noStrict`, `module`, `raw`, `async` (`Test262:AsyncTestComplete` y `doneprintHandle.js`), `CanBlockIsFalse`/`CanBlockIsTrue`, y negativos por fase. La fase se comprueba igual para todos: un negativo de `parse` o `resolution` que llega a ejecutar `$DONOTEVALUATE()` falla. Adaptadores por motor solo para invocar y extraer el nombre del error:
+Propio, en Python con biblioteca estándar, el mismo para todos los motores. Aplica INTERPRETING.md: `assert.js` y `sta.js` más `includes`; `onlyStrict`, `noStrict`, `module`, `raw`, `async` (`Test262:AsyncTestComplete` y `doneprintHandle.js`), `CanBlockIsFalse`/`CanBlockIsTrue` (el hilo principal de los tres motores puede bloquear: las pruebas `CanBlockIsFalse` no corren y las `CanBlockIsTrue` sí), y negativos por fase. La fase se comprueba igual para todos: un negativo de `parse` o `resolution` que llega a ejecutar `$DONOTEVALUATE()` falla. Adaptadores por motor solo para invocar y extraer el nombre del error:
 
 - Node: `node --experimental-vm-modules bench/test262/node_host.js` (implementa `$262` con `vm`).
 - Boa: `boa --test262-object [--strict] [-m]`.
@@ -148,9 +148,9 @@ Tiempo límite de 10 s por escenario (excedido = falla), 10 hilos. Validación: 
 | `python3 bench/scope_check.py` | `OK` si cada directorio del alcance (o su sucesor registrado) tiene pruebas en `MANIFEST.json`. |
 | `python3 bench/deps.py ldd BIN…` | `OK` si las `NEEDED` del ELF (recursivas vía `ldd`) están en la lista permitida. |
 | `python3 bench/deps.py forbidden` | `OK` si ningún nombre prohibido aparece como dependencia en `Cargo.toml`, `Cargo.lock`, `#[link(name=…)]`, `extern crate` o directivas `cargo:rustc-link-lib`. |
-| `python3 bench/wptrun.py --product P (--all \| --dir D… \| --path T…) [--run N] [--force]` | `P ∈ {firefox, chromium, servo, vidrio}`. Escribe por directorio `bench/results/wpt/P/KEY/SLUG.json` (wptreport), `SLUG.log` (log crudo mozlog) y `SLUG.mem` (bytes de `memory.peak`). `SLUG` = directorio con `/` → `__`. `KEY` = versión fijada para referencias, o los primeros 16 hex del sha256 de `target/release/vidrio`, seguido de `-` y los 12 primeros del commit de WPT, y `-rN` si `--run N` con N>1. Si el archivo ya existe y no hay `--force`, no vuelve a correr. |
+| `python3 bench/wptrun.py --product P (--all \| --dir D… \| --path T…) [--run N] [--force]` | `P ∈ {firefox, chromium, servo, vidrio}`. Escribe por directorio `bench/results/wpt/P/KEY/SLUG.json` (wptreport), `SLUG.log` (log crudo mozlog) y `SLUG.mem` (bytes de `memory.peak`); para vidrio también `SLUG.shots` (`--log-wptscreenshot`, capturas de reftests). `SLUG` = directorio con `/` → `__`. `KEY` = versión fijada para referencias, o los primeros 16 hex del sha256 de `target/release/vidrio`, seguido de `-` y los 12 primeros del commit de WPT, y `-rN` si `--run N` con N>1. Si el archivo ya existe y no hay `--force`, no vuelve a correr. |
 | `python3 bench/wptrun.py --net-probe` | Dentro del mismo aislamiento de red imprime `loopback=ok|fail` y `external=blocked|reachable`. |
-| `python3 bench/test262.py --engine E [--control]` | `E ∈ {node, boa, vjs}`. Escribe `bench/results/test262/E/KEY.json` (`KEY` = versión fijada o sha256[:16] de `target/release/vjs`), o `bench/results/test262/control-E.json` con `--control`. Esquema: `{"engine", "engine_version", "test262_commit", "excluded_features": [...], "scenarios": [{"file", "mode": "strict|sloppy|module|raw", "result": "pass|fail", "detail"}]}`. |
+| `python3 bench/test262.py --engine E [--control]` | `E ∈ {node, boa, vjs}`. Escribe `bench/results/test262/E/KEY.json` (`KEY` = versión fijada o sha256[:16] de `target/release/vjs`), o `bench/results/test262/control-E.json` con `--control`. Esquema: `{"engine", "engine_version", "test262_commit", "excluded_features": [...], "scenarios": [{"file", "mode": "strict|sloppy|module|raw", "result": "pass|fail", "detail"}]}`; `file` es relativo a la raíz de test262 (`test/...`). Si el archivo ya existe y no hay `--force`, no vuelve a correr. El conjunto de control son doce archivos `bench/test262/control/<tipo>-<pass\|fail>.js` con `tipo ∈ {strict, nostrict, module, async, negparse, negruntime}`: los `-pass` deben pasar y los `-fail` deben fallar. |
 | `python3 bench/ratio.py` | Lee los reportes y escribe `bench/results/ratio.json`: `{"vs_firefox": {D: R, …, "total": R}, "vs_chromium": {…}, "servo_vs_firefox": {…}, "P": …, "P_boa": …}`. |
 | `python3 bench/stability.py --product vidrio --dir D` | Compara las corridas `-r1` y `-r2` de D y lista las diferencias por subtest. |
 
@@ -160,6 +160,11 @@ Archivos versionados del arnés: `bench/pins.json`, `bench/scope.json`, `bench/f
 
 - `bench/excluded.json`: pruebas excluidas porque fallan igual en Firefox y Chromium por configuración de la PC. Cada entrada lleva la prueba, el estado observado en ambos y la causa. Se quitan del conteo de todos los productos por igual. Empieza vacía. Las pruebas `https` nunca se excluyen por falta de TLS.
 - `bench/flaky.json`: pruebas inestables. Una entrada solo entra con dos corridas del mismo binario y la misma configuración que difieren en esa prueba, con ambos estados anotados; no puede superar el 0.5% de las pruebas del directorio de estabilidad (`dom`). Las inestables no se excluyen de R.
+- Formatos: `excluded.json` = `{"tests": [{"test": "/ruta", "firefox": "ESTADO", "chromium": "ESTADO", "cause": "…"}]}`; `flaky.json` = `{"tests": [{"test": "/ruta", "subtest": "nombre o null", "statuses": ["ESTADO1", "ESTADO2"]}]}`. `test` es la URL del wptreport.
+
+### 5.8 Prueba del primer cuadro
+
+`tests/first-frame/page.html` es una página fija hecha solo de cajas de color sólido (sin texto ni imágenes); `tests/first-frame/expected.png` (800×600, RGB de 8 bits, sin entrelazado) la genera `tests/first-frame/make_expected.py` a partir de la misma lista de rectángulos, sin usar vidrio. `vidrio file:///ruta/page.html` crea su ventana en (0,0) con 800×600. El checker arranca Xvfb, toma con libxcb la imagen de la ventana raíz antes y después de lanzar vidrio, y compara al píxel el primer cuadro que difiere del fondo contra `expected.png`.
 
 ## 6. Comando de chequeo y CI
 
@@ -179,7 +184,7 @@ Razón: es la forma más simple que cubre todo el alcance, cabe holgada en 16 GB
 Razón: el piso es de conformidad (test262), no de velocidad; correr el GC solo en puntos seguros elimina el enraizado manual en código nativo, que es la fuente principal de errores en motores escritos a mano.
 
 **D-04. Integración con el arnés: servidor WebDriver propio dentro del binario (como Ladybird y Servo) con los ejecutores WebDriver genéricos de wptrunner y el subconjunto de §4.**
-Razón: los ejecutores genéricos ya existen y no hay que mantener un ejecutor propio dentro de wptrunner; el parche queda en tres archivos de registro del producto.
+Razón: los ejecutores genéricos ya existen y no hay que mantener un ejecutor propio dentro de wptrunner; el parche queda en cuatro archivos de registro del producto.
 
 **D-05. Orden de fases: K1 arnés y referencias; K2 motor JS (test262 mide); K3 red, documento, DOM y WebDriver (testharness de parsing y DOM miden) y cierre del piso test262; K4 CSS, layout, texto, pintado y ventana (reftests miden); K5 conformidad y pisos WPT.**
 Razón: respeta que test262 y los testharness de parsing y DOM midan antes que los reftests, y cada frontera de K es un punto de medición que los mini sprints siguientes usan para dirigir el trabajo.
