@@ -1,0 +1,66 @@
+{
+  "wpt": {
+    "repo": "https://github.com/web-platform-tests/wpt.git",
+    "commit": "77787fe5fe2339a45c740638c5a65345911e80bf"
+  },
+  "test262": {
+    "repo": "https://github.com/tc39/test262.git",
+    "commit": "9ae074624e2de0ac79e5e29945d2523c69f8582f"
+  },
+  "firefox": {
+    "version": "159.0.1",
+    "binary": "/usr/bin/firefox",
+    "package": "firefox 159.0.1-1"
+  },
+  "geckodriver": {
+    "version": "0.37.1",
+    "binary": "/usr/bin/geckodriver",
+    "package": "geckodriver 0.37.1-1"
+  },
+  "chromium": {
+    "version": "156.0.8078.79",
+    "binary": "/usr/bin/chromium",
+    "package": "chromium 156.0.8078.79-1"
+  },
+  "chromedriver": {
+    "version": "156.0.8078.79",
+    "binary": "/usr/bin/chromedriver",
+    "package": "chromium 156.0.8078.79-1"
+  },
+  "servo": {
+    "version": "0.8.0",
+    "url": "https://github.com/servo/servo/releases/download/v0.8.0/servo-x86_64-linux-gnu.tar.gz",
+    "sha256": "02a78892746e69bc39d471da2bb012fd8ce228e464cda5a017334d0e88c61de1",
+    "binary": "bench/cache/servo/servoshell",
+    "version_output": "Servo 0.8.0-4e136d8ef"
+  },
+  "boa": {
+    "version": "0.22.0",
+    "url": "https://github.com/boa-dev/boa/releases/download/v0.22/boa-x86_64-unknown-linux-gnu",
+    "sha256": "d3484a63c9ee5f025de11379d055285a0bc015cf6d1d45b895e0d0f93566d671",
+    "binary": "bench/cache/boa/boa",
+    "version_output": "boa 0.22.0"
+  },
+  "node": {
+    "version": "26.13.0",
+    "binary": "/usr/bin/node",
+    "package": "nodejs 26.13.0-1"
+  },
+  "xvfb": {
+    "version": "21.1.25",
+    "binary": "/usr/bin/Xvfb",
+    "package": "xorg-server-xvfb 21.1.25-2"
+  },
+  "data": {
+    "unicode": "17.0.0",
+    "unicode_url": "https://www.unicode.org/Public/17.0.0/",
+    "whatwg_encoding_commit": "be17ac5c49881336538acfc7b40dba3c8009144b"
+  },
+  "run": {
+    "processes": 4,
+    "memory_limit_bytes": 10737418240,
+    "test262_threads": 10,
+    "test262_timeout_s": 10,
+    "chromium_extra_args": []
+  }
+}

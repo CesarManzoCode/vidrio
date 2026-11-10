@@ -1,0 +1,41 @@
+{
+  "wpt": [
+    "html/syntax/parsing",
+    "html/syntax/serializing-html-fragments",
+    "dom",
+    "encoding",
+    "url",
+    "html/semantics/scripting-1",
+    "html/webappapis",
+    "css/css-syntax",
+    "css/css-values",
+    "css/css-variables",
+    "css/selectors",
+    "css/css-cascade",
+    "css/cssom",
+    "css/cssom-view",
+    "css/CSS2",
+    "css/css-display",
+    "css/css-box",
+    "css/css-sizing",
+    "css/css-position",
+    "css/css-flexbox",
+    "css/css-grid",
+    "css/css-tables",
+    "css/css-text",
+    "css/css-fonts",
+    "css/css-backgrounds",
+    "css/css-color"
+  ],
+  "successors": {
+    "html/syntax/serializing": "html/syntax/serializing-html-fragments"
+  },
+  "wpt_extra": [
+    "third_party/test262"
+  ],
+  "test262": [
+    "test/language",
+    "test/built-ins",
+    "test/annexB"
+  ]
+}
