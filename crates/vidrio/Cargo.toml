@@ -1,0 +1,14 @@
+[package]
+name = "vidrio"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vidrio"
+path = "src/main.rs"
+
+[dependencies]
+vgfx = { path = "../vgfx" }
+vjs = { path = "../vjs" }
+vnet = { path = "../vnet" }

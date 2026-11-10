@@ -1,0 +1,8 @@
+[package]
+name = "vgfx"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+vnet = { path = "../vnet" }
