@@ -1,0 +1,8 @@
+/vault/private/
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+/target/
+/bench/cache/
+/bench/results/
+__pycache__/
