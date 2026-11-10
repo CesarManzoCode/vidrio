@@ -27,10 +27,20 @@ Todavía no hay mediciones. Los pisos de éxito son `R(total) ≥ R_servo(total)
 ## Uso
 
 ```sh
-make check            # formato, tipos, tests y dependencias prohibidas
+make check                                    # formato, tipos, tests y dependencias prohibidas
+python3 bench/fetch.py                        # descarga WPT, test262, Servo y Boa fijados a bench/cache/ y aplica el parche
+python3 bench/pins_check.py                   # comprueba que árboles y binarios están en sus revisiones fijadas
+python3 bench/scope_check.py                  # comprueba que cada directorio del alcance tiene pruebas en el manifiesto
+python3 bench/deps.py ldd BIN…                # comprueba que las bibliotecas enlazadas de BIN están permitidas
+python3 bench/deps.py forbidden               # comprueba que no hay dependencias prohibidas
+python3 bench/wptrun.py --product P --all     # corre WPT aislado para P (también --dir D…, --path T…, --run N, --force)
+python3 bench/wptrun.py --net-probe           # comprueba que el aislamiento deja loopback y bloquea la red externa
+python3 bench/test262.py --engine E           # corre test262 con E ∈ {node, boa, vjs} (--control: conjunto de control)
+python3 bench/ratio.py                        # calcula R, R_servo, P y P_boa en bench/results/ratio.json
+python3 bench/stability.py --product vidrio --dir D  # compara dos corridas de D contra bench/flaky.json
 ```
 
-Los comandos del navegador y del arnés se documentan aquí cuando existan.
+Los comandos del navegador se documentan aquí cuando existan.
 
 ## Licencia
 
