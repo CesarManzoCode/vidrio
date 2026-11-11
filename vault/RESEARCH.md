@@ -35,7 +35,7 @@ Consultas del 2026-11-09. Cada entrada dice qué se tomó de la fuente y cómo s
 | 21 | Servo, https://github.com/servo/servo/releases/tag/v0.8.0 | 0.8.0; `servo-x86_64-linux-gnu.tar.gz` sha256 `02a78892746e69bc39d471da2bb012fd8ce228e464cda5a017334d0e88c61de1` | Ejecutado: `servoshell --version` → `Version: Servo 0.8.0-4e136d8ef`; `--help` muestra `--webdriver`, `--headless`, `--certificate-path`, `--ignore-certificate-errors`; `ldd` sin faltantes |
 | 22 | Boa, https://github.com/boa-dev/boa/releases/tag/v0.22 | 0.22.0; `boa-x86_64-unknown-linux-gnu` sha256 `d3484a63c9ee5f025de11379d055285a0bc015cf6d1d45b895e0d0f93566d671` | Ejecutado: `boa --version` → `boa 0.22.0`; `--help` muestra `--test262-object`, `--strict`, `-m/--module`, `--no-can-block`; `$262.createRealm` y `$262.agent` presentes |
 | 23 | Node, paquete Arch `nodejs` | 26.13.0-1 | Ejecutado: `node --version`; `--experimental-vm-modules` habilita `vm.SourceTextModule` |
-| 24 | Xvfb, paquete Arch `extra/xorg-server-xvfb` | 21.1.25-2; binario `/usr/bin/Xvfb` | `pacman -Si`; lista de archivos en archlinux.org (no instalado; requiere sudo) |
+| 24 | Xvfb, paquete Arch `extra/xorg-server-xvfb` | 21.1.25-2; binario `/usr/bin/Xvfb` | `pacman -Si`; lista de archivos en archlinux.org. Ejecutado (2026-11-11, instalado): `Xvfb -version` responde `Unrecognized option: -version` y la ayuda (`-help`) no tiene opción de versión; la versión sale del *vendor release* del setup X11 (`12101025` = 1.21.1.25), que lee `bench/pins_check.py` |
 
 ## 3. Toolchain y sistema
 
