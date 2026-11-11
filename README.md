@@ -28,7 +28,7 @@ Todavía no hay mediciones. Los pisos de éxito son `R(total) ≥ R_servo(total)
 
 ```sh
 make check                                    # formato, tipos, tests y dependencias prohibidas
-python3 bench/fetch.py                        # descarga WPT, test262, Servo y Boa fijados a bench/cache/ y aplica el parche
+python3 bench/fetch.py                        # descarga WPT, test262, Servo, Boa y lo que ./wpt run baja al arrancar (requisitos, MojoJS, OpenH264) y aplica el parche
 python3 bench/pins_check.py                   # comprueba que árboles y binarios están en sus revisiones fijadas
 python3 bench/scope_check.py                  # comprueba que cada directorio del alcance tiene pruebas en el manifiesto
 python3 bench/deps.py ldd BIN…                # comprueba que las bibliotecas enlazadas de BIN están permitidas

@@ -8,9 +8,22 @@ skipped when its result is already in place.
 
   1. WPT and test262: shallow fetch of the pinned commit, detached checkout.
   2. Servo and Boa: download, check sha256, extract Servo, make Boa executable.
-  3. ./wpt environment (created by ./wpt itself) and MANIFEST.json.
+  3. ./wpt environment (created by ./wpt itself) with every requirement that
+     `./wpt run` installs for the reference products (see WPT_REQUIREMENTS),
+     and MANIFEST.json.
   4. Firefox test prefs in bench/cache/firefox-prefs via tools/wpt/browser.py.
-  5. bench/wpt/vidrio.patch applied to the WPT tree if not applied yet.
+  5. MojoJS bindings for the pinned Chromium in bench/cache/mojojs via
+     tools/wpt/browser.py, the same download `./wpt run chromium` does.
+  6. OpenH264 GMP plugin for Firefox in <venv>/browsers/nightly, where `./wpt
+     run firefox` looks for it (it asks to download it when missing), via
+     tools/wpt/browser.py.
+  7. <venv>/servo -> bench/cache/servo: wptrunner's servo.py looks for
+     resources/wpt-prefs.json only in the WPT tree and in ./_venv3/servo, where
+     `./wpt install servo browser` would extract Servo.
+  8. bench/wpt/vidrio.patch applied to the WPT tree if not applied yet.
+
+The measurement runs without network (CONTRACT §5.5), so everything `./wpt
+run` would otherwise download on first use is fetched here.
 
 A missing package binary (it needs sudo to install) only prints a warning.
 Exits 1 if any step failed, 0 otherwise.
@@ -30,6 +43,7 @@ REPO = Path(__file__).resolve().parent.parent
 PINS = REPO / "bench" / "pins.json"
 CACHE = REPO / "bench" / "cache"
 PATCH = REPO / "bench" / "wpt" / "vidrio.patch"
+MOJOJS = CACHE / "mojojs"
 TREES = ("wpt", "test262")
 DOWNLOADS = ("servo", "boa")
 
@@ -40,6 +54,43 @@ from tools.wpt.browser import Firefox
 logging.basicConfig(level=logging.INFO)
 print(Firefox(logging.getLogger("fetch")).install_prefs(sys.argv[1], dest=sys.argv[2]))
 """
+
+MOJOJS_SCRIPT = """\
+import logging, sys
+sys.path.insert(0, ".")
+from tools.wpt.browser import Chromium
+logging.basicConfig(level=logging.INFO)
+print(Chromium(logging.getLogger("fetch")).install_mojojs(dest=sys.argv[2], browser_binary=sys.argv[1]))
+"""
+
+OPENH264_SCRIPT = """\
+import logging, sys
+sys.path.insert(0, ".")
+from tools.wpt.browser import Firefox
+logging.basicConfig(level=logging.INFO)
+firefox = Firefox(logging.getLogger("fetch"))
+binary_dir = firefox._get_browser_binary_dir(sys.argv[2], sys.argv[3])
+print(firefox.install_openh264(binary_dir=binary_dir, binary=sys.argv[1], channel=sys.argv[3]))
+"""
+
+# `./wpt run` defaults to --channel nightly; Firefox looks for OpenH264 under
+# <venv>/browsers/<channel>/gmp-gmpopenh264.
+WPT_CHANNEL = "nightly"
+
+# What `./wpt run` installs before running (tools/wpt/commands.json for `run`,
+# tools/wpt/run.py setup_wptrunner): the base requirements, the product ones
+# (Firefox and Chromium; Servo has none), the platform accessibility ones
+# (aamtest is a default test type) and the WebTransport ones. Inside the
+# isolation pip has no network, so they must already be satisfied.
+WPT_REQUIREMENTS = (
+    "tools/manifest/requirements.txt",
+    "tools/wptrunner/requirements.txt",
+    "tools/serve/requirements.txt",
+    "tools/wptrunner/requirements_firefox.txt",
+    "tools/wptrunner/requirements_chromium.txt",
+    "tools/wptrunner/requirements_platform_accessibility.txt",
+    "tools/webtransport/requirements.txt",
+)
 
 
 class FetchError(Exception):
@@ -166,11 +217,21 @@ def wpt_venv_python(tree):
     raise FetchError(f"no ./wpt virtualenv in {tree}")
 
 
+def requirements_command(python, tree):
+    cmd = [str(python), "-m", "pip", "--disable-pip-version-check", "install", "--prefer-binary"]
+    for rel in WPT_REQUIREMENTS:
+        cmd += ["-r", str(Path(tree) / rel)]
+    return cmd
+
+
 def ensure_wpt_env(tree):
     # ./wpt creates its virtualenv (_venv3) on first use and installs the
     # requirements of the command; run and install cover tools/wpt/browser.py.
     wpt(tree, "run", "--help")
     wpt(tree, "install", "--help")
+    proc = subprocess.run(requirements_command(wpt_venv_python(tree), tree), cwd=tree)
+    if proc.returncode != 0:
+        raise FetchError(f"pip install of the ./wpt run requirements exited with {proc.returncode}")
 
 
 def ensure_manifest(tree, rebuild):
@@ -193,6 +254,65 @@ def ensure_firefox_prefs(tree, binary, dest):
     if proc.returncode != 0:
         raise FetchError(f"install_prefs failed: {proc.stderr.strip()}")
     return proc.stdout.strip().splitlines()[-1]
+
+
+def mojojs_gen(dest=MOJOJS):
+    """The gen/ directory that `./wpt run chromium --mojojs-path` takes."""
+    return Path(dest) / "mojojs" / "gen"
+
+
+def ensure_mojojs(tree, binary, dest=MOJOJS):
+    """Downloads the MojoJS bindings matching `binary` once. Returns True if it
+    downloaded."""
+    if (mojojs_gen(dest) / "DOWNLOADED_FROM").is_file():
+        return False
+    Path(dest).mkdir(parents=True, exist_ok=True)
+    proc = subprocess.run(
+        [str(wpt_venv_python(tree)), "-c", MOJOJS_SCRIPT, str(binary), str(dest)],
+        cwd=tree,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or not (mojojs_gen(dest) / "DOWNLOADED_FROM").is_file():
+        raise FetchError(f"install_mojojs failed: {proc.stderr.strip()[-300:]}")
+    return True
+
+
+def openh264_dir(tree):
+    venv = wpt_venv_python(tree).parent.parent
+    return venv / "browsers" / WPT_CHANNEL / "gmp-gmpopenh264"
+
+
+def ensure_openh264(tree, binary):
+    """Installs the OpenH264 plugin `./wpt run firefox` uses once. Returns True
+    if it installed it."""
+    target = openh264_dir(tree)
+    if target.is_dir() and any(p.is_dir() for p in target.iterdir()):
+        return False
+    proc = subprocess.run(
+        [str(wpt_venv_python(tree)), "-c", OPENH264_SCRIPT, str(binary),
+         str(target.parent.parent.parent), WPT_CHANNEL],
+        cwd=tree,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or not (target.is_dir() and any(p.is_dir() for p in target.iterdir())):
+        raise FetchError(f"install_openh264 failed: {proc.stderr.strip()[-300:]}")
+    return True
+
+
+def ensure_servo_link(tree, servo_dir):
+    """Makes <venv>/servo a symlink to `servo_dir`. Returns True if it changed."""
+    link = wpt_venv_python(tree).parent.parent / "servo"
+    target = Path(servo_dir).resolve()
+    if link.is_symlink() and link.resolve() == target:
+        return False
+    if link.is_symlink() or link.is_file():
+        link.unlink()
+    elif link.exists():
+        raise FetchError(f"{link} exists and is not a symlink")
+    link.symlink_to(target, target_is_directory=True)
+    return True
 
 
 def patch_applied(tree, patch):
@@ -257,8 +377,16 @@ def main():
                 )
                 if prefs:
                     log(f"firefox prefs root: {prefs}")
+                step("openh264", lambda: ensure_openh264(wpt_tree, firefox))
             else:
                 log("WARN firefox prefs skipped: Firefox not installed")
+            servo_dir = (REPO / pins["servo"]["binary"]).parent
+            step("servo link", lambda: ensure_servo_link(wpt_tree, servo_dir))
+            chromium = Path(pins["chromium"]["binary"])
+            if chromium.is_file():
+                step("mojojs", lambda: ensure_mojojs(wpt_tree, chromium))
+            else:
+                log("WARN mojojs skipped: Chromium not installed")
         step("vidrio.patch", lambda: ensure_patch(wpt_tree, PATCH))
 
     if failures:

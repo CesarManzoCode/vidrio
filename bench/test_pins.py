@@ -5,9 +5,13 @@ import io
 import json
 import os
 import subprocess
+import shutil
+import struct
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 BENCH = Path(__file__).resolve().parent
 
@@ -120,7 +124,7 @@ class PinsCheckTest(unittest.TestCase):
             },
             "xvfb": {
                 "version": "21.1.25",
-                "binary": str(fake_binary(self.root / "bin/Xvfb", "X.Org X Server 1.21.1.25")),
+                "binary": str(fake_binary(self.root / "bin/Xvfb", "")),
                 "package": "xorg-server-xvfb 21.1.25-2",
             },
             "boa": {
@@ -132,6 +136,13 @@ class PinsCheckTest(unittest.TestCase):
             },
             "data": {"unicode": "17.0.0"},
         }
+
+        self.xvfb_output = "X.Org vendor release 12101025 (1.21.1.25)"
+        patcher = mock.patch.object(
+            pins_check, "xvfb_version", side_effect=lambda binary: (self.xvfb_output, None)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -151,12 +162,13 @@ class PinsCheckTest(unittest.TestCase):
         self.assertEqual(pins_check.binary_findings(self.pins, self.root), ([], []))
         self.assertEqual(self.run_main(), (0, "OK\n"))
 
-    def test_xvfb_uses_dash_version(self):
-        fake = self.root / "bin/Xvfb"
-        fake.write_text(
-            '#!/bin/sh\n[ "$1" = "-version" ] && echo "X.Org X Server 1.21.1.25" >&2\n'
-        )
+    def test_xvfb_version_comes_from_the_x11_setup(self):
         self.assertEqual(pins_check.binary_findings(self.pins, self.root), ([], []))
+        pins_check.xvfb_version.assert_called_once_with(Path(self.pins["xvfb"]["binary"]))
+        self.xvfb_output = "X.Org vendor release 12101024 (1.21.1.24)"
+        findings, _ = pins_check.binary_findings(self.pins, self.root)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("xvfb", findings[0])
 
     def test_mismatched_version(self):
         fake_binary(self.root / "bin/node", "v26.13.1")
@@ -218,6 +230,75 @@ class PinsCheckTest(unittest.TestCase):
         self.assertEqual(len(pins_check.tree_findings(pins, self.root)), 1)
         pins = {"test262": {"repo": source.as_uri(), "commit": first}}
         self.assertIn("no git tree", pins_check.tree_findings(pins, self.root)[0])
+
+
+# Minimal X server for xvfb_version: honours -displayfd, listens on
+# <socket dir>/X7 and answers the connection setup with a vendor release.
+FAKE_XVFB = """\
+import os, socket, struct, sys
+fd = int(sys.argv[sys.argv.index("-displayfd") + 1])
+server = socket.socket(socket.AF_UNIX)
+server.bind(os.path.join({socket_dir!r}, "X7"))
+server.listen(1)
+os.write(fd, b"7\\n")
+os.close(fd)
+conn, _ = server.accept()
+conn.recv(12)
+conn.sendall(struct.pack("<BxHHHI", {status}, 11, 0, 0, {release}) + bytes(20))
+conn.close()
+"""
+
+
+class XvfbVersionTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def fake_xvfb(self, status=1, release=12101025):
+        script = self.root / "fake_xvfb.py"
+        script.write_text(FAKE_XVFB.format(socket_dir=str(self.root), status=status, release=release))
+        binary = self.root / "Xvfb"
+        binary.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n")
+        binary.chmod(0o755)
+        return binary
+
+    def test_decode_vendor_release(self):
+        self.assertEqual(pins_check.decode_vendor_release(12101025), "1.21.1.25")
+        self.assertEqual(pins_check.decode_vendor_release(12001020), "1.20.1.20")
+
+    def test_setup_request(self):
+        self.assertEqual(pins_check.setup_request(), b"l\x00\x0b\x00\x00\x00" + bytes(6))
+
+    def test_parse_setup_reply(self):
+        ok = struct.pack("<BxHHHI", 1, 11, 0, 0, 12101025)
+        self.assertEqual(pins_check.parse_setup_reply(ok), (12101025, None))
+        self.assertIsNone(pins_check.parse_setup_reply(b"\x00" + ok[1:])[0])
+        self.assertIsNone(pins_check.parse_setup_reply(ok[:6])[0])
+
+    def test_fake_server(self):
+        output, error = pins_check.xvfb_version(self.fake_xvfb(), 10, self.root)
+        self.assertIsNone(error)
+        self.assertEqual(output, "X.Org vendor release 12101025 (1.21.1.25)")
+        self.assertTrue(pins_check.version_matches("21.1.25", output))
+
+    def test_refused_setup(self):
+        output, error = pins_check.xvfb_version(self.fake_xvfb(status=0), 10, self.root)
+        self.assertIsNone(output)
+        self.assertIn("refused", error)
+
+    def test_binary_without_displayfd(self):
+        output, error = pins_check.xvfb_version(fake_binary(self.root / "Xvfb", "usage"), 10, self.root)
+        self.assertIsNone(output)
+        self.assertIn("display", error)
+
+    @unittest.skipUnless(shutil.which("Xvfb"), "Xvfb not installed")
+    def test_installed_xvfb(self):
+        output, error = pins_check.xvfb_version(shutil.which("Xvfb"))
+        self.assertIsNone(error)
+        self.assertRegex(output, r"^X\.Org vendor release \d+ \(\d+\.\d+\.\d+\.\d+\)$")
 
 
 GIT_ENV = {
@@ -316,6 +397,51 @@ class FetchIdempotenceTest(unittest.TestCase):
             fetch.ensure_download(payload.as_uri(), "0" * 64, other)
         self.assertFalse(other.exists())
         self.assertFalse(other.with_name("boa.part").exists())
+
+
+class FetchWptEnvTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tree = Path(self._tmp.name) / "wpt"
+        python = self.tree / "_venv3/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_text("")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_requirements_cover_wpt_run(self):
+        cmd = fetch.requirements_command("py", self.tree)
+        self.assertEqual(cmd[:3], ["py", "-m", "pip"])
+        files = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-r"]
+        self.assertEqual(files, [str(self.tree / r) for r in fetch.WPT_REQUIREMENTS])
+        for name in ("requirements_firefox.txt", "requirements_chromium.txt",
+                     "requirements_platform_accessibility.txt"):
+            self.assertIn(f"tools/wptrunner/{name}", fetch.WPT_REQUIREMENTS)
+
+    def test_servo_link(self):
+        servo = Path(self._tmp.name) / "servo"
+        servo.mkdir()
+        self.assertTrue(fetch.ensure_servo_link(self.tree, servo))
+        link = self.tree / "_venv3/servo"
+        self.assertEqual(link.resolve(), servo.resolve())
+        self.assertFalse(fetch.ensure_servo_link(self.tree, servo))
+        link.unlink()
+        link.mkdir()
+        with self.assertRaises(fetch.FetchError):
+            fetch.ensure_servo_link(self.tree, servo)
+
+    def test_downloads_are_skipped_when_present(self):
+        dest = Path(self._tmp.name) / "mojojs"
+        (fetch.mojojs_gen(dest)).mkdir(parents=True)
+        (fetch.mojojs_gen(dest) / "DOWNLOADED_FROM").write_text("u")
+        (fetch.openh264_dir(self.tree) / "2.6.0").mkdir(parents=True)
+        self.assertEqual(fetch.openh264_dir(self.tree),
+                         self.tree / "_venv3/browsers/nightly/gmp-gmpopenh264")
+        with mock.patch.object(fetch.subprocess, "run") as run:
+            self.assertFalse(fetch.ensure_mojojs(self.tree, "/usr/bin/chromium", dest))
+            self.assertFalse(fetch.ensure_openh264(self.tree, "/usr/bin/firefox"))
+            run.assert_not_called()
 
 
 class PublishedListsTest(unittest.TestCase):

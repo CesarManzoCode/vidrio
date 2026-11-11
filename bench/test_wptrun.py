@@ -75,6 +75,7 @@ class CommandTest(TempRoot):
             "--binary", "/usr/bin/firefox",
             "--webdriver-binary", "/usr/bin/geckodriver",
             "--prefs-root", str(self.root / "bench/cache/firefox-prefs"),
+            "--reftest-external",
             "firefox", "css/css-grid",
         ])
 
@@ -92,6 +93,7 @@ class CommandTest(TempRoot):
         self.assertEqual(cmd, self.common(files) + [
             "--binary", "/usr/bin/chromium",
             "--webdriver-binary", "/usr/bin/chromedriver",
+            "--mojojs-path", str(self.root / "bench/cache/mojojs/mojojs/gen"),
             "--binary-arg", "--no-sandbox",
             "--binary-arg", "--use-gl=swiftshader",
             "chromium", "css/css-grid",
@@ -196,6 +198,16 @@ class BinaryTest(TempRoot):
     def test_missing_vidrio_exits_1(self):
         self.assertEqual(wptrun.check_binaries("vidrio", pins(), self.root), 1)
 
+    def test_chromium_needs_mojojs(self):
+        p = pins()
+        for name in ("chromium", "chromedriver"):
+            binary = self.root / name
+            binary.write_bytes(b"")
+            p[name]["binary"] = str(binary)
+        self.assertEqual(wptrun.check_binaries("chromium", p, self.root), 1)
+        (self.root / "bench/cache/mojojs/mojojs/gen").mkdir(parents=True)
+        self.assertIsNone(wptrun.check_binaries("chromium", p, self.root))
+
 
 class IsolationTest(unittest.TestCase):
     def test_full_line(self):
@@ -210,6 +222,18 @@ class IsolationTest(unittest.TestCase):
             "/usr/bin/python3 /repo/bench/wptrun.py --inner --mem /r/dom.mem -- ./wpt run firefox dom",
         ])
 
+    def test_hosts_mount(self):
+        cmd = wptrun.isolated(
+            ["--mem", "/r/dom.mem"], uid=1000, gid=1001, python="py", script="s.py",
+            hosts="/repo/bench/cache/hosts",
+        )
+        self.assertEqual(cmd[6:9], ["unshare", "-rnm", "sh"])
+        self.assertEqual(
+            cmd[-1],
+            "ip link set lo up && mount --bind /repo/bench/cache/hosts /etc/hosts && "
+            "exec unshare --map-user=1000 --map-group=1001 py s.py --inner --mem /r/dom.mem",
+        )
+
     def test_quoting(self):
         cmd = wptrun.isolated(["--mem", "/a b/x.mem"], uid=1, gid=2, python="py", script="s.py")
         self.assertTrue(cmd[-1].endswith("py s.py --inner --mem '/a b/x.mem'"))
@@ -222,6 +246,34 @@ class IsolationTest(unittest.TestCase):
         )
         with self.assertRaises(wptrun.RunError):
             wptrun.cgroup_path("1:name=systemd:/x\n")
+
+
+class HostsTest(TempRoot):
+    def test_write_hosts(self):
+        system = self.root / "etc-hosts"
+        system.write_text("127.0.0.1 localhost")
+        wpt = self.root / "wpt"
+        wpt.mkdir()
+        (wpt / "wpt").write_text("print('127.0.0.1\\tweb-platform.test')\n")
+        dest = wptrun.write_hosts(self.root / "cache/hosts", system, wpt)
+        self.assertEqual(dest.read_text(), "127.0.0.1 localhost\n127.0.0.1\tweb-platform.test\n")
+
+    def test_write_hosts_fails_without_entries(self):
+        wpt = self.root / "wpt"
+        wpt.mkdir()
+        (wpt / "wpt").write_text("print('nothing')\n")
+        with self.assertRaises(wptrun.RunError):
+            wptrun.write_hosts(self.root / "hosts", self.root / "missing", wpt)
+
+    def test_only_chromium_gets_the_hosts_mount(self):
+        out = self.root / "out"
+        for product, mounted in (("chromium", True), ("firefox", False)):
+            with mock.patch.object(wptrun, "write_hosts", return_value=Path("/h")) as write, \
+                    mock.patch.object(wptrun.subprocess, "run") as run:
+                run.return_value.returncode = 1
+                self.assertEqual(wptrun.run_one(product, "dom", out, pins(), force=True), "failed")
+                self.assertEqual(write.called, mounted)
+                self.assertEqual("-rnm" in run.call_args.args[0], mounted)
 
 
 class NetProbeTest(unittest.TestCase):

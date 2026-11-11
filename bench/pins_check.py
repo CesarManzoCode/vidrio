@@ -6,13 +6,22 @@
 Checks that bench/cache/wpt and bench/cache/test262 are at their pinned
 commits, that the Servo and Boa downloads match their sha256, and that every
 pinned binary reports its pinned version. Prints `FAIL <reason>` per problem.
+
+Xvfb has no version flag (21.1.25 answers `-version` with "Unrecognized
+option"); the version it reports is the vendor release of the X11 connection
+setup, so the check starts it on a free display (-displayfd), connects to its
+socket, decodes the release (12101025 -> 1.21.1.25) and stops it.
 Exit codes: 0 with `OK` if everything matches, 77 if a package binary is not
 installed (installing it needs sudo), 1 otherwise.
 """
 
 import hashlib
 import json
+import os
 import re
+import select
+import socket
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -21,9 +30,8 @@ REPO = Path(__file__).resolve().parent.parent
 PINS = REPO / "bench" / "pins.json"
 CACHE = Path("bench") / "cache"
 
-# Binaries whose version flag is not `--version`.
-VERSION_FLAGS = {"xvfb": "-version"}
 VERSION_TIMEOUT_S = 60
+X11_SOCKET_DIR = Path("/tmp/.X11-unix")
 
 
 def sha256_file(path):
@@ -86,6 +94,87 @@ def run_version(binary, flag):
     return proc.stdout, None
 
 
+def decode_vendor_release(release):
+    """X.Org vendor release number -> version, e.g. 12101025 -> "1.21.1.25"."""
+    return "{}.{}.{}.{}".format(
+        release // 10000000, release // 100000 % 100, release // 1000 % 100, release % 1000
+    )
+
+
+def setup_request():
+    """X11 connection setup, little endian, protocol 11.0, no authorization."""
+    return struct.pack("<cxHHHHxx", b"l", 11, 0, 0, 0)
+
+
+def parse_setup_reply(data):
+    """(vendor release, None) from an X11 setup reply, or (None, reason)."""
+    if len(data) < 12:
+        return None, f"short X11 setup reply ({len(data)} bytes)"
+    if data[0] != 1:
+        return None, f"X11 setup refused (status {data[0]})"
+    return struct.unpack_from("<I", data, 8)[0], None
+
+
+def read_display(fd, timeout):
+    """Reads the display number Xvfb writes to -displayfd."""
+    buf = b""
+    while not buf.endswith(b"\n"):
+        ready, _, _ = select.select([fd], [], [], timeout)
+        if not ready:
+            raise TimeoutError("Xvfb did not report its display")
+        chunk = os.read(fd, 16)
+        if not chunk:
+            raise OSError("Xvfb exited before reporting its display")
+        buf += chunk
+    return int(buf)
+
+
+def xvfb_version(binary, timeout=VERSION_TIMEOUT_S, socket_dir=X11_SOCKET_DIR):
+    """Like run_version for Xvfb: (output, None) or (None, error)."""
+    read_fd, write_fd = os.pipe()
+    try:
+        proc = subprocess.Popen(
+            [str(binary), "-displayfd", str(write_fd), "-nolisten", "tcp"],
+            pass_fds=(write_fd,),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as err:
+        os.close(read_fd)
+        os.close(write_fd)
+        return None, str(err)
+    os.close(write_fd)
+    try:
+        display = read_display(read_fd, timeout)
+        with socket.socket(socket.AF_UNIX) as conn:
+            conn.settimeout(timeout)
+            conn.connect(str(Path(socket_dir) / f"X{display}"))
+            conn.sendall(setup_request())
+            data = b""
+            while len(data) < 12:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+        release, error = parse_setup_reply(data)
+        if error:
+            return None, error
+        return f"X.Org vendor release {release} ({decode_vendor_release(release)})", None
+    except (OSError, ValueError) as err:
+        return None, f"cannot read the X11 vendor release: {err}"
+    finally:
+        os.close(read_fd)
+        proc.kill()
+        proc.wait()
+
+
+def read_version(name, binary):
+    if name == "xvfb":
+        return xvfb_version(binary)
+    return run_version(binary, "--version")
+
+
 def binary_findings(pins, root):
     """Returns (findings, missing package binaries)."""
     findings = []
@@ -107,7 +196,7 @@ def binary_findings(pins, root):
                 findings.append(f"{name}: {hashed} missing (run bench/fetch.py)")
             elif sha256_file(hashed) != entry["sha256"]:
                 findings.append(f"{name}: sha256 of {hashed} != {entry['sha256']}")
-        output, error = run_version(binary, VERSION_FLAGS.get(name, "--version"))
+        output, error = read_version(name, binary)
         if output is None:
             findings.append(f"{name}: cannot run {binary}: {error}")
             continue

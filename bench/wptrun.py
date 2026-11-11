@@ -23,16 +23,35 @@ Isolation: every run is
      <python> bench/wptrun.py --inner …'
 
 so it has its own network namespace with only loopback, runs as the real
-uid again, and gets a cgroup of its own. The --inner mode runs `./wpt run`,
-waits, reads its cgroup from /proc/self/cgroup and writes
-/sys/fs/cgroup/<path>/memory.peak to <SLUG>.mem. A peak above
-run.memory_limit_bytes keeps the results but is reported and makes the exit
-status 1.
+uid again, and gets a cgroup of its own. Chromium runs also get a private
+mount namespace (`unshare -rnm`) where bench/cache/hosts is bind-mounted on
+/etc/hosts before the second unshare: the `./wpt run` front end of the pinned
+revision refuses to start `chromium` unless /etc/hosts holds the entries of
+`./wpt make-hosts-file` (check_environ does not exempt it as it does chrome,
+firefox and servo). Chromium itself still resolves the test hosts through the
+--host-resolver-rules that wptrunner passes; the real /etc/hosts is never
+touched. bench/cache/hosts is the current /etc/hosts followed by the output
+of `./wpt make-hosts-file`, rewritten before every Chromium run.
+
+The --inner mode runs `./wpt run`, waits, reads its cgroup from
+/proc/self/cgroup and writes /sys/fs/cgroup/<path>/memory.peak to
+<SLUG>.mem. A peak above run.memory_limit_bytes keeps the results but is
+reported and makes the exit status 1.
 
 Firefox gets --prefs-root with the profiles saved by bench/fetch.py: the
 directory under bench/cache/firefox-prefs that holds profiles.json for the
 pinned version (wptrunner reads <prefs-root>/profiles.json), or
 bench/cache/firefox-prefs itself if that directory is not there.
+
+Firefox also gets --reftest-external: the default internal reftest runner
+opens chrome://remote/content/marionette/reftest-chrome/reftest.xhtml, which
+the Arch firefox package does not ship (every reftest then ends as CRASH
+with "Missing chrome or resource URLs"); the external runner compares
+WebDriver screenshots instead.
+
+Chromium gets --mojojs-path bench/cache/mojojs/mojojs/gen, the bindings that
+bench/fetch.py downloaded for the pinned version: without it `./wpt run
+chromium` downloads them on every run, which fails without network.
 
 --net-probe, in the same isolation, listens on 127.0.0.1 and connects to it,
 tries 1.1.1.1:443 with a 3 s timeout and prints
@@ -61,6 +80,7 @@ SCOPE = BENCH / "scope.json"
 WPT = BENCH / "cache" / "wpt"
 RESULTS = BENCH / "results" / "wpt"
 SELF = BENCH / "wptrun.py"
+HOSTS = BENCH / "cache" / "hosts"
 
 PRODUCTS = ("firefox", "chromium", "servo", "vidrio")
 EXIT_MISSING_REFERENCE = 77
@@ -143,6 +163,10 @@ def firefox_prefs_root(pins, root=REPO):
     return pinned if (pinned / "profiles.json").is_file() else base
 
 
+def mojojs_path(root=REPO):
+    return Path(root) / "bench" / "cache" / "mojojs" / "mojojs" / "gen"
+
+
 def product_args(product, pins, root=REPO):
     root = Path(root)
     if product == "firefox":
@@ -150,11 +174,13 @@ def product_args(product, pins, root=REPO):
             "--binary", str(root / pins["firefox"]["binary"]),
             "--webdriver-binary", str(root / pins["geckodriver"]["binary"]),
             "--prefs-root", str(firefox_prefs_root(pins, root)),
+            "--reftest-external",
         ]
     if product == "chromium":
         args = [
             "--binary", str(root / pins["chromium"]["binary"]),
             "--webdriver-binary", str(root / pins["chromedriver"]["binary"]),
+            "--mojojs-path", str(mojojs_path(root)),
         ]
         for extra in pins["run"].get("chromium_extra_args", []):
             args += ["--binary-arg", extra]
@@ -187,17 +213,43 @@ def wpt_command(product, test_path, files, pins, root=REPO):
     return cmd
 
 
-def isolated(inner_args, uid=None, gid=None, python=None, script=SELF):
-    """Wraps `<python> wptrun.py --inner <inner_args>` in the isolation of §5.5."""
+def isolated(inner_args, uid=None, gid=None, python=None, script=SELF, hosts=None):
+    """Wraps `<python> wptrun.py --inner <inner_args>` in the isolation of §5.5.
+    With `hosts`, that file is bind-mounted on /etc/hosts in a private mount
+    namespace (see the module docstring)."""
     uid = os.getuid() if uid is None else uid
     gid = os.getgid() if gid is None else gid
     python = sys.executable if python is None else python
     inner = shlex.join([str(python), str(script), "--inner", *inner_args])
-    shell = f"ip link set lo up && exec unshare --map-user={uid} --map-group={gid} {inner}"
+    shell = "ip link set lo up && "
+    flags = "-rn"
+    if hosts is not None:
+        shell += f"mount --bind {shlex.quote(str(hosts))} /etc/hosts && "
+        flags = "-rnm"
+    shell += f"exec unshare --map-user={uid} --map-group={gid} {inner}"
     return [
         "systemd-run", "--user", "--scope", "--quiet", "--collect", "--",
-        "unshare", "-rn", "sh", "-c", shell,
+        "unshare", flags, "sh", "-c", shell,
     ]
+
+
+def write_hosts(dest=HOSTS, system_hosts=Path("/etc/hosts"), wpt=WPT):
+    """Writes `dest` = /etc/hosts + `./wpt make-hosts-file` and returns it."""
+    proc = subprocess.run(
+        [sys.executable, "wpt", "make-hosts-file"],
+        cwd=wpt,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or "web-platform.test" not in proc.stdout:
+        raise RunError(f"./wpt make-hosts-file exited {proc.returncode}: {proc.stderr.strip()[-200:]}")
+    base = Path(system_hosts).read_text()
+    if base and not base.endswith("\n"):
+        base += "\n"
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(base + proc.stdout)
+    return dest
 
 
 def cgroup_path(text):
@@ -291,8 +343,17 @@ def run_one(product, test_path, out_dir, pins, force):
             path.unlink()
     out_dir.mkdir(parents=True, exist_ok=True)
     cmd = wpt_command(product, test_path, files, pins)
+    hosts = None
+    if product == "chromium":
+        try:
+            hosts = write_hosts()
+        except (OSError, RunError) as err:
+            log(f"{product} {test_path}: FAIL, no hosts file: {err}")
+            return "failed"
     log(f"{product} {test_path}: running")
-    returncode = subprocess.run(isolated(["--mem", str(files["mem"]), "--", *cmd])).returncode
+    returncode = subprocess.run(
+        isolated(["--mem", str(files["mem"]), "--", *cmd], hosts=hosts)
+    ).returncode
     if returncode != 0 or not files["json"].is_file() or not files["mem"].is_file():
         log(f"{product} {test_path}: FAIL (exit {returncode})")
         if files["json"].exists():
@@ -339,6 +400,9 @@ def check_binaries(product, pins, root=REPO):
     if missing:
         log(f"missing reference binary: {', '.join(map(str, missing))}")
         return EXIT_MISSING_REFERENCE
+    if product == "chromium" and not mojojs_path(root).is_dir():
+        log(f"{mojojs_path(root)} not found; run python3 bench/fetch.py")
+        return 1
     return None
 
 
