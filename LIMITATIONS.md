@@ -23,3 +23,8 @@ Fuente única de lo que el proyecto no demuestra. Ningún otro archivo los repit
 - No hay aislamiento por procesos ni sandbox: un solo proceso ejecuta todo.
 - La criptografía de TLS es propia y no se afirma que sea de tiempo constante ni resistente a canales laterales; sirve para cargar las pruebas `https` del servidor de WPT, no para navegar con seguridad.
 - Sin JIT: el motor JS es un intérprete.
+- El recolector de vjs solo corre en los puntos seguros del bucle de intérprete más externo (el que abre la evaluación de un script) y entre trabajos. El código JS que corre dentro de una llamada nativa (callbacks de built-ins, trabajos de promesas, llamadas del host a una función) no recolecta hasta volver a ese bucle.
+- vjs no implementa llamadas de cola (feature `tail-call-optimization` de test262): cada llamada ocupa un marco, y pasados 10 000 marcos se lanza `RangeError`.
+- El texto que recibe `eval` se pasa al parser como UTF-8: un sustituto UTF-16 suelto dentro de ese texto se convierte en U+FFFD antes de analizarlo.
+- En vjs, la expresión `extends` de una clase ve los nombres privados de la propia clase; la especificación la evalúa con el entorno privado exterior.
+- En vjs, una referencia a un enlace declarativo que solo se resuelve por nombre (con `with` o `eval` directo no estricto de por medio) se vuelve a resolver al asignar, en vez de fijarse antes de evaluar el lado derecho; solo se nota si el lado derecho borra un `var` creado por `eval`.

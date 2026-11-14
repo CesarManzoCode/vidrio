@@ -62,6 +62,7 @@ impl Trace for NativeFunctionData {
 /// Compiled code of a function; defined by the bytecode compiler.
 pub trait CodeBlock: Trace + Any {
     fn as_any(&self) -> &dyn Any;
+    fn as_any_rc(self: Rc<Self>) -> Rc<dyn Any>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -249,7 +249,7 @@ pub type IntrinsicInstaller = fn(&mut Agent, Realm);
 /// Installers run, in order, by [`Agent::create_realm`] after the
 /// fundamental objects and the error constructors. Each built-in area adds
 /// its installer here.
-pub const INTRINSIC_INSTALLERS: &[IntrinsicInstaller] = &[];
+pub const INTRINSIC_INSTALLERS: &[IntrinsicInstaller] = &[crate::interp::intrinsics::install];
 
 fn function_prototype_behavior(_agent: &mut Agent, _call: NativeCall<'_>) -> JsResult<Value> {
     Ok(Value::Undefined)

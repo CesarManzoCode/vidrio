@@ -690,10 +690,13 @@ impl Heap {
 
     pub fn alloc_env(&mut self, outer: Option<Env>, slots: usize) -> Env {
         self.note_alloc(size_of::<EnvData>() + slots * size_of::<Option<Value>>());
-        self.envs.alloc(EnvData {
-            outer,
-            slots: vec![None; slots],
-        })
+        self.envs.alloc(EnvData::declarative(outer, slots))
+    }
+
+    /// Allocates a prepared environment record.
+    pub fn alloc_env_data(&mut self, data: EnvData) -> Env {
+        self.note_alloc(size_of::<EnvData>() + data.slots.len() * size_of::<Option<Value>>());
+        self.envs.alloc(data)
     }
 
     pub fn env(&self, e: Env) -> &EnvData {

@@ -13,6 +13,10 @@ use crate::buffer::{ArrayBufferData, TypedArrayData};
 use crate::exotic::{ArgumentsData, HostObject, NamespaceData};
 use crate::function::{BoundFunctionData, BytecodeFunctionData, NativeFunctionData};
 use crate::gc::{Heap, HeapBigInt, JsString, Object, Realm, Shape, Symbol, Trace, Tracer};
+use crate::interp::generator::GeneratorData;
+use crate::interp::iter::{ArrayIteratorData, ForInData};
+use crate::interp::promise::PromiseData;
+use crate::ops::IteratorRecord;
 use crate::proxy::ProxyData;
 use crate::shape::{MAX_SHAPE_PROPERTIES, ShapeData, shape_with};
 use crate::value::{PropertyKey, Value, WeakKey};
@@ -482,6 +486,15 @@ pub enum ObjectKind {
     FinalizationRegistry(Box<RegistryData>),
     /// An object of the host (the DOM) with its own internal methods.
     Host(Rc<dyn HostObject>),
+    Promise(Box<PromiseData>),
+    /// Generator, async generator, or the suspended body of an async
+    /// function (an object that is never exposed to code).
+    Generator(Box<GeneratorData>),
+    /// `%ForInIteratorPrototype%` instance (CreateForInIterator).
+    ForInIterator(Box<ForInData>),
+    ArrayIterator(Box<ArrayIteratorData>),
+    /// `%AsyncFromSyncIteratorPrototype%` instance: `[[SyncIteratorRecord]]`.
+    AsyncFromSyncIterator(Box<IteratorRecord>),
 }
 
 impl ObjectKind {
@@ -532,6 +545,11 @@ impl ObjectKind {
             ObjectKind::ModuleNamespace(n) => n.trace(tracer),
             ObjectKind::Proxy(p) => p.trace(tracer),
             ObjectKind::Host(h) => h.trace(tracer),
+            ObjectKind::Promise(p) => p.trace(tracer),
+            ObjectKind::Generator(g) => g.trace(tracer),
+            ObjectKind::ForInIterator(f) => f.trace(tracer),
+            ObjectKind::ArrayIterator(a) => a.trace(tracer),
+            ObjectKind::AsyncFromSyncIterator(r) => r.trace(tracer),
         }
     }
 

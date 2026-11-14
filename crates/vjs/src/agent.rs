@@ -179,6 +179,8 @@ pub struct Agent {
     pub(crate) kept_alive: Vec<WeakKey>,
     /// Native calls in progress; the collector does not run while > 0.
     pub(crate) nested_calls: usize,
+    /// Interpreter frames on all run loops (see `interp::MAX_FRAME_DEPTH`).
+    pub(crate) frame_depth: usize,
     gc_requested: bool,
 }
 
@@ -222,7 +224,7 @@ impl Agent {
         Agent {
             heap,
             symbols,
-            evaluator: None,
+            evaluator: Some(crate::interp::EVALUATOR),
             symbol_registry: HashMap::new(),
             realms: Vec::new(),
             contexts: Vec::new(),
@@ -230,6 +232,7 @@ impl Agent {
             host_tasks: VecDeque::new(),
             kept_alive: Vec::new(),
             nested_calls: 0,
+            frame_depth: 0,
             gc_requested: false,
         }
     }
