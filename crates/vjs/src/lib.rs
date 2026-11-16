@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod ast;
+pub mod base64;
 pub mod bigint;
 pub mod buffer;
 pub mod builtins;
@@ -30,6 +31,7 @@ pub mod shape;
 pub mod string;
 pub mod unicode;
 pub mod value;
+pub mod waiter;
 pub mod weak;
 
 pub use agent::Agent;

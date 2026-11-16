@@ -3,7 +3,9 @@
 //! `Reflect`, `Proxy`, the function properties of the global object, and
 //! the numeric built-ins `Number`, `BigInt` and `Math` (§21), `String`
 //! (§22.1) and `RegExp` (§22.2), `Array` (§23.1), the iterators (§27.1),
-//! the keyed collections (§24) and the weak references (§26).
+//! the keyed collections (§24), the weak references (§26), and the
+//! structured data of §25 and §23.2: `ArrayBuffer`, `SharedArrayBuffer`,
+//! `DataView`, `Atomics` and the TypedArrays.
 //!
 //! Every property gets the attributes, `length` and `name` the
 //! specification gives it: methods are `{ writable, !enumerable,
@@ -11,7 +13,10 @@
 //! non-writable, non-configurable `prototype` properties.
 
 pub mod array;
+pub mod array_buffer;
+pub mod atomics;
 pub mod collections;
+pub mod data_view;
 pub mod error;
 pub mod function;
 pub mod global;
@@ -23,6 +28,7 @@ pub mod reflect;
 pub mod regexp;
 pub mod string;
 pub mod symbol;
+pub mod typed_array;
 pub mod weak;
 
 use crate::agent::Agent;
@@ -53,6 +59,12 @@ pub fn install(agent: &mut Agent, realm: Realm) {
     array::install(agent, realm);
     collections::install(agent, realm);
     weak::install(agent, realm);
+    array_buffer::install(agent, realm);
+    // After `array`: %TypedArray.prototype%.toString is
+    // %Array.prototype.toString%.
+    typed_array::install(agent, realm);
+    data_view::install(agent, realm);
+    atomics::install(agent, realm);
 }
 
 pub(crate) fn intrinsic(agent: &Agent, realm: Realm, which: Intrinsic) -> Object {

@@ -25,6 +25,7 @@ use vjs::interp::promise::{PromiseState, promise_state};
 use vjs::module::{self, LoadPayload, ModuleHost, ModuleRequest, Referrer};
 use vjs::object::{ObjectKind, PropertyDescriptor};
 use vjs::realm::Intrinsic;
+use vjs::waiter::AsyncWait;
 use vjs::{JsResult, Throw, Value, evaluate_script_record, ops};
 
 const USAGE: &str = "usage: vjs --version | vjs [--strict] [--module] [--test262] FILE...";
@@ -240,8 +241,10 @@ fn describe_uncaught(agent: &mut Agent, v: Value) -> String {
     }
 }
 
-/// Runs queued jobs and host tasks until both queues are empty; the first
-/// error that escapes is returned.
+/// Runs queued jobs and host tasks until both queues are empty, and waits
+/// for the pending promises of `Atomics.waitAsync`; the first error that
+/// escapes is returned. A waiter without a timeout is only waited for
+/// while another agent could notify it.
 fn drain(agent: &mut Agent) -> Result<(), Value> {
     loop {
         if let Some(Throw(e)) = agent.run_jobs().into_iter().next() {
@@ -251,12 +254,36 @@ fn drain(agent: &mut Agent) -> Result<(), Value> {
             Some(Err(Throw(e))) => return Err(e),
             Some(Ok(())) => {}
             None => {
-                if !agent.has_pending_jobs() {
-                    return Ok(());
+                if agent.has_pending_jobs() {
+                    continue;
                 }
+                if agent.has_pending_async_waits() {
+                    let wait = if other_agents_alive() {
+                        AsyncWait::Forever
+                    } else {
+                        AsyncWait::Timeouts
+                    };
+                    if agent.settle_async_waits(wait) {
+                        continue;
+                    }
+                }
+                return Ok(());
             }
         }
     }
+}
+
+/// Whether another agent of the process is running: the main thread for
+/// an agent, a started agent for the main thread.
+fn other_agents_alive() -> bool {
+    IS_AGENT.with(Cell::get)
+        || hub()
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .agents
+            .iter()
+            .any(|s| s.alive)
 }
 
 // ----- globals -----

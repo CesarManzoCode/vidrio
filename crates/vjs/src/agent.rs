@@ -186,6 +186,10 @@ pub struct Agent {
     pub module_host: Option<Rc<dyn crate::module::ModuleHost>>,
     /// Module records, pending loads and dynamic imports.
     pub(crate) modules: crate::module::ModuleState,
+    /// `[[CanBlock]]`: whether `Atomics.wait` may suspend this agent.
+    pub can_block: bool,
+    /// The pending promises of `Atomics.waitAsync`.
+    pub(crate) async_waits: crate::waiter::AsyncWaits,
 }
 
 impl Default for Agent {
@@ -204,6 +208,7 @@ struct AgentRoots<'a> {
     host_tasks: &'a VecDeque<Job>,
     kept_alive: &'a [WeakKey],
     modules: &'a crate::module::ModuleState,
+    async_waits: &'a crate::waiter::AsyncWaits,
 }
 
 impl Trace for AgentRoots<'_> {
@@ -220,6 +225,7 @@ impl Trace for AgentRoots<'_> {
         self.host_tasks.trace(tracer);
         self.kept_alive.trace(tracer);
         self.modules.trace(tracer);
+        self.async_waits.trace(tracer);
     }
 }
 
@@ -242,6 +248,8 @@ impl Agent {
             gc_requested: false,
             module_host: None,
             modules: crate::module::ModuleState::default(),
+            can_block: true,
+            async_waits: crate::waiter::AsyncWaits::new(),
         }
     }
 
@@ -388,6 +396,18 @@ impl Agent {
         !self.host_tasks.is_empty()
     }
 
+    /// Whether a promise of `Atomics.waitAsync` is still pending.
+    pub fn has_pending_async_waits(&self) -> bool {
+        !self.async_waits.is_empty()
+    }
+
+    /// Settles the promises of `Atomics.waitAsync` that are ready (their
+    /// reactions become jobs), blocking first as `wait` says; whether any
+    /// settled. A safe point like [`Agent::run_jobs`].
+    pub fn settle_async_waits(&mut self, wait: crate::waiter::AsyncWait) -> bool {
+        crate::waiter::settle(self, wait)
+    }
+
     fn run_job(&mut self, job: Job) -> JsResult<()> {
         let pushed = match job.realm {
             Some(realm) => {
@@ -415,6 +435,11 @@ impl Agent {
         while let Some(job) = self.jobs.pop_front() {
             if let Err(e) = self.run_job(job) {
                 errors.push(e);
+            }
+            // Promises of `Atomics.waitAsync` settle between jobs, so a
+            // script that keeps the queue busy still sees them.
+            if !self.async_waits.is_empty() {
+                crate::waiter::settle(self, crate::waiter::AsyncWait::No);
             }
             self.safepoint(&[]);
         }
@@ -480,6 +505,7 @@ impl Agent {
             host_tasks: &self.host_tasks,
             kept_alive: &self.kept_alive,
             modules: &self.modules,
+            async_waits: &self.async_waits,
         };
         let mut all: Vec<&dyn Trace> = Vec::with_capacity(extra_roots.len() + 1);
         all.push(&roots);

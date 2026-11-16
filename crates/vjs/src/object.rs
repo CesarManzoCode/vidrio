@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::mem::size_of;
 use std::rc::Rc;
 
-use crate::buffer::{ArrayBufferData, TypedArrayData};
+use crate::buffer::{ArrayBufferData, DataViewData, TypedArrayData};
 use crate::builtins::array::FromAsyncData;
 use crate::builtins::collections::{CollectionIteratorData, MapData};
 use crate::builtins::iterator::HelperData;
@@ -510,6 +510,7 @@ pub enum ObjectKind {
     ArrayBuffer(Box<ArrayBufferData>),
     /// TypedArray (integer-indexed exotic object).
     TypedArray(Box<TypedArrayData>),
+    DataView(Box<DataViewData>),
     ModuleNamespace(Box<NamespaceData>),
     Proxy(ProxyData),
     WeakMap(EphemeronTable),
@@ -600,6 +601,7 @@ impl ObjectKind {
             ObjectKind::Arguments(a) => a.trace(tracer),
             ObjectKind::ArrayBuffer(b) => b.trace(tracer),
             ObjectKind::TypedArray(t) => t.trace(tracer),
+            ObjectKind::DataView(d) => d.trace(tracer),
             ObjectKind::ModuleNamespace(n) => n.trace(tracer),
             ObjectKind::Proxy(p) => p.trace(tracer),
             ObjectKind::Host(h) => h.trace(tracer),

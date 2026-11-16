@@ -172,7 +172,14 @@ pub(crate) fn array_iterator_next(agent: &mut Agent, call: NativeCall<'_>) -> Js
         let r = ops::create_iter_result_object(agent, Value::Undefined, true);
         return Ok(Value::Object(r));
     };
-    let len = ops::length_of_array_like(agent, a)? as u64;
+    let len = if matches!(agent.heap.object(a).kind, ObjectKind::TypedArray(_)) {
+        match crate::buffer::typed_array_length(agent, a) {
+            Some(len) => len as u64,
+            None => return agent.type_error("the TypedArray is detached or out of bounds"),
+        }
+    } else {
+        ops::length_of_array_like(agent, a)? as u64
+    };
     if index >= len {
         if let ObjectKind::ArrayIterator(d) = &mut agent.heap.object_mut(it).kind {
             d.object = None;
