@@ -1,17 +1,52 @@
-//! ParseJSON (ECMA-262 §25.5.1.1 without the reviver): JSON text (RFC 8259)
-//! to a value of the current realm. JSON modules use it; `JSON.parse`
-//! can build on it.
+//! ParseJSON (ECMA-262 §25.5.1.1): JSON text (RFC 8259) to a value of the
+//! current realm, plus the JSON Parse Records of the source text access
+//! (`json-parse-with-source`) that `JSON.parse` hands to a reviver. JSON
+//! modules use [`parse_json`]; `JSON.parse` uses [`parse_json_with_records`].
 
 use crate::agent::Agent;
 use crate::completion::JsResult;
 use crate::object::ObjectKind;
 use crate::ops;
 use crate::realm::Intrinsic;
-use crate::value::Value;
+use crate::value::{PropertyKey, Value};
+
+/// JSON Parse Record: the value a piece of the text produced, the range
+/// of its source text if it is a primitive, and the records of its
+/// elements (arrays) or entries (objects, in source order; with duplicate
+/// keys the last one is the property's).
+#[derive(Debug)]
+pub struct ParseRecord {
+    pub value: Value,
+    pub source: Option<(usize, usize)>,
+    pub elements: Vec<ParseRecord>,
+    pub entries: Vec<(PropertyKey, ParseRecord)>,
+}
+
+impl ParseRecord {
+    fn new(value: Value) -> ParseRecord {
+        ParseRecord {
+            value,
+            source: None,
+            elements: Vec::new(),
+            entries: Vec::new(),
+        }
+    }
+
+    /// The record of the entry `key` (the last one with that key).
+    pub fn entry(&self, key: PropertyKey) -> Option<&ParseRecord> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|(k, _)| *k == key)
+            .map(|(_, r)| r)
+    }
+}
 
 struct JsonParser<'a> {
     text: &'a [u16],
     pos: usize,
+    /// Whether to keep the records of elements and entries.
+    records: bool,
 }
 
 type Parsed<T> = Result<T, String>;
@@ -51,25 +86,29 @@ impl JsonParser<'_> {
         Ok(())
     }
 
-    fn value(&mut self, agent: &mut Agent, depth: usize) -> Parsed<Value> {
+    fn value(&mut self, agent: &mut Agent, depth: usize) -> Parsed<ParseRecord> {
         if depth > 10_000 {
             return self.error("nesting too deep");
         }
         self.skip_ws();
-        match self.peek() {
-            Some(0x7B) => self.object(agent, depth),
-            Some(0x5B) => self.array(agent, depth),
+        let start = self.pos;
+        let v = match self.peek() {
+            Some(0x7B) => return self.object(agent, depth),
+            Some(0x5B) => return self.array(agent, depth),
             Some(0x22) => {
                 let units = self.string()?;
-                Ok(Value::String(agent.heap.alloc_string(&units)))
+                Value::String(agent.heap.alloc_string(&units))
             }
-            Some(0x74) => self.literal("true").map(|_| Value::Boolean(true)),
-            Some(0x66) => self.literal("false").map(|_| Value::Boolean(false)),
-            Some(0x6E) => self.literal("null").map(|_| Value::Null),
-            Some(c) if c == u16::from(b'-') || (0x30..=0x39).contains(&c) => self.number(),
-            Some(_) => self.error("unexpected character"),
-            None => self.error("unexpected end of input"),
-        }
+            Some(0x74) => self.literal("true").map(|_| Value::Boolean(true))?,
+            Some(0x66) => self.literal("false").map(|_| Value::Boolean(false))?,
+            Some(0x6E) => self.literal("null").map(|_| Value::Null)?,
+            Some(c) if c == u16::from(b'-') || (0x30..=0x39).contains(&c) => self.number()?,
+            Some(_) => return self.error("unexpected character"),
+            None => return self.error("unexpected end of input"),
+        };
+        let mut r = ParseRecord::new(v);
+        r.source = Some((start, self.pos));
+        Ok(r)
     }
 
     fn digits(&mut self) -> usize {
@@ -168,15 +207,20 @@ impl JsonParser<'_> {
         }
     }
 
-    fn array(&mut self, agent: &mut Agent, depth: usize) -> Parsed<Value> {
+    fn array(&mut self, agent: &mut Agent, depth: usize) -> Parsed<ParseRecord> {
         self.expect(b'[')?;
         let mut items = Vec::new();
+        let mut elements = Vec::new();
         self.skip_ws();
         if self.peek() == Some(u16::from(b']')) {
             self.pos += 1;
         } else {
             loop {
-                items.push(self.value(agent, depth + 1)?);
+                let r = self.value(agent, depth + 1)?;
+                items.push(r.value);
+                if self.records {
+                    elements.push(r);
+                }
                 self.skip_ws();
                 match self.peek() {
                     Some(0x2C) => self.pos += 1,
@@ -188,17 +232,21 @@ impl JsonParser<'_> {
                 }
             }
         }
-        Ok(Value::Object(ops::create_array_from_list(agent, &items)))
+        let a = ops::create_array_from_list(agent, &items);
+        let mut r = ParseRecord::new(Value::Object(a));
+        r.elements = elements;
+        Ok(r)
     }
 
-    fn object(&mut self, agent: &mut Agent, depth: usize) -> Parsed<Value> {
+    fn object(&mut self, agent: &mut Agent, depth: usize) -> Parsed<ParseRecord> {
         self.expect(b'{')?;
         let proto = agent.intrinsic(Intrinsic::ObjectPrototype);
         let o = agent.heap.create_object(Some(proto), ObjectKind::Ordinary);
+        let mut r = ParseRecord::new(Value::Object(o));
         self.skip_ws();
         if self.peek() == Some(u16::from(b'}')) {
             self.pos += 1;
-            return Ok(Value::Object(o));
+            return Ok(r);
         }
         loop {
             self.skip_ws();
@@ -208,7 +256,10 @@ impl JsonParser<'_> {
             let v = self.value(agent, depth + 1)?;
             let key = agent.heap.key_from_units(&key);
             // A fresh extensible ordinary object accepts every key.
-            let _ = ops::create_data_property(agent, o, key, v);
+            let _ = ops::create_data_property(agent, o, key, v.value);
+            if self.records {
+                r.entries.push((key, v));
+            }
             self.skip_ws();
             match self.peek() {
                 Some(0x2C) => self.pos += 1,
@@ -219,25 +270,40 @@ impl JsonParser<'_> {
                 _ => return self.error("expected ',' or '}'"),
             }
         }
-        Ok(Value::Object(o))
+        Ok(r)
     }
 }
 
-/// Parses JSON text; a malformed text throws a SyntaxError.
-pub fn parse_json(agent: &mut Agent, text: &[u16]) -> JsResult<Value> {
-    let mut p = JsonParser { text, pos: 0 };
-    let result = p.value(agent, 0).and_then(|v| {
+fn parse(agent: &mut Agent, text: &[u16], records: bool) -> JsResult<ParseRecord> {
+    let mut p = JsonParser {
+        text,
+        pos: 0,
+        records,
+    };
+    let result = p.value(agent, 0).and_then(|r| {
         p.skip_ws();
         if p.pos == text.len() {
-            Ok(v)
+            Ok(r)
         } else {
             p.error("unexpected text after the value")
         }
     });
     match result {
-        Ok(v) => Ok(v),
+        Ok(r) => Ok(r),
         Err(msg) => agent.syntax_error(&msg),
     }
+}
+
+/// Parses JSON text; a malformed text throws a SyntaxError.
+pub fn parse_json(agent: &mut Agent, text: &[u16]) -> JsResult<Value> {
+    parse(agent, text, false).map(|r| r.value)
+}
+
+/// Parses JSON text and keeps the JSON Parse Record of every value (the
+/// snapshot CreateJSONParseRecord takes: the values are those of the
+/// fresh objects, which no code has touched yet).
+pub fn parse_json_with_records(agent: &mut Agent, text: &[u16]) -> JsResult<ParseRecord> {
+    parse(agent, text, true)
 }
 
 #[cfg(test)]
@@ -266,5 +332,23 @@ mod tests {
         for bad in ["", "01", "[1,]", "{\"a\" 1}", "'x'", "1 2", "\"\t\""] {
             assert!(parse(&mut agent, bad).is_err(), "{bad:?} should fail");
         }
+    }
+
+    #[test]
+    fn records_keep_source_ranges() {
+        let mut agent = Agent::new();
+        agent.initialize_host_defined_realm();
+        let units: Vec<u16> = "{\"a\": [1.50, \"x\"], \"a\": -0}".encode_utf16().collect();
+        let r = parse_json_with_records(&mut agent, &units).expect("valid JSON");
+        assert_eq!(r.source, None);
+        assert_eq!(r.entries.len(), 2);
+        let key = agent.heap.key_from_str("a");
+        let last = r.entry(key).expect("entry a");
+        let (s, e) = last.source.expect("primitive source");
+        assert_eq!(String::from_utf16_lossy(&units[s..e]), "-0");
+        let first = &r.entries[0].1;
+        assert_eq!(first.elements.len(), 2);
+        let (s, e) = first.elements[0].source.expect("number source");
+        assert_eq!(String::from_utf16_lossy(&units[s..e]), "1.50");
     }
 }

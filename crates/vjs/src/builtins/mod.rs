@@ -5,7 +5,8 @@
 //! (§22.1) and `RegExp` (§22.2), `Array` (§23.1), the iterators (§27.1),
 //! the keyed collections (§24), the weak references (§26), and the
 //! structured data of §25 and §23.2: `ArrayBuffer`, `SharedArrayBuffer`,
-//! `DataView`, `Atomics` and the TypedArrays.
+//! `DataView`, `Atomics` and the TypedArrays, `JSON` (§25.5) and the
+//! `Promise` statics and prototype methods beyond `then` (§27.2).
 //!
 //! Every property gets the attributes, `length` and `name` the
 //! specification gives it: methods are `{ writable, !enumerable,
@@ -21,9 +22,11 @@ pub mod error;
 pub mod function;
 pub mod global;
 pub mod iterator;
+pub mod json;
 pub mod math;
 pub mod number;
 pub mod object;
+pub mod promise;
 pub mod reflect;
 pub mod regexp;
 pub mod string;
@@ -65,6 +68,8 @@ pub fn install(agent: &mut Agent, realm: Realm) {
     typed_array::install(agent, realm);
     data_view::install(agent, realm);
     atomics::install(agent, realm);
+    json::install(agent, realm);
+    promise::install(agent, realm);
 }
 
 pub(crate) fn intrinsic(agent: &Agent, realm: Realm, which: Intrinsic) -> Object {

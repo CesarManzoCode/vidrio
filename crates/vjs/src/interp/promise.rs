@@ -1,8 +1,8 @@
 //! The core of Promise (ECMA-262 §27.2) that `await` needs: promise
 //! objects, resolving functions, capabilities, reactions and their jobs
 //! (HostEnqueuePromiseJob is `Agent::enqueue_job`), the constructor and
-//! `Promise.prototype.then`. The rest of the built-in arrives with the
-//! Promise built-ins.
+//! `Promise.prototype.then`. The static methods, `catch` and `finally`
+//! are in `builtins::promise`.
 
 use crate::agent::{Agent, ErrorKind, Job, JobTask};
 use crate::completion::{JsResult, Throw};

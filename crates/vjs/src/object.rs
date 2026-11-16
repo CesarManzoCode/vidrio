@@ -554,6 +554,8 @@ pub enum ObjectKind {
     /// The suspended state of an `Array.fromAsync` call (never exposed to
     /// code).
     FromAsync(Box<FromAsyncData>),
+    /// An object made by `JSON.rawJSON`: `[[IsRawJSON]]`.
+    RawJson,
 }
 
 impl ObjectKind {
@@ -582,6 +584,7 @@ impl ObjectKind {
             | ObjectKind::Number(_)
             | ObjectKind::Error
             | ObjectKind::UnmappedArguments
+            | ObjectKind::RawJson
             | ObjectKind::WeakMap(_)
             | ObjectKind::WeakSet(_)
             | ObjectKind::WeakRef(_)
