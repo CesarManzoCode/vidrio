@@ -4,6 +4,7 @@ pub mod agent;
 pub mod ast;
 pub mod bigint;
 pub mod buffer;
+pub mod builtins;
 pub mod bytecode;
 pub mod compiler;
 pub mod completion;

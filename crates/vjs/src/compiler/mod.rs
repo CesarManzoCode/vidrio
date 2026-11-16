@@ -971,3 +971,25 @@ pub fn compile_eval(
     c.emit(Op::Return);
     Rc::new(c.finish_fn(None, 0, None))
 }
+
+/// Compiles the function of CreateDynamicFunction. Its scope is the global
+/// environment (every free name resolves by name), its name is
+/// `anonymous` and its `[[SourceText]]` is the whole assembled `source`.
+pub fn compile_dynamic_function(
+    agent: &mut Agent,
+    function: &ast::Function,
+    source: Rc<str>,
+) -> Rc<Code> {
+    let mut function = function.clone();
+    function.span = Span::new(0, source.len() as u32);
+    let mut c = Compiler::new(agent, source);
+    c.fns
+        .push(FnState::new(CodeKind::Script, FnInfo::default(), false));
+    let index = c.function(
+        &function,
+        func::FnName::Static("anonymous".to_string()),
+        false,
+    );
+    let outer = c.fns.pop().expect("the outer state was pushed above");
+    outer.functions[index as usize].clone()
+}
