@@ -14,7 +14,9 @@ pub mod gc;
 pub mod generated;
 pub mod internal;
 pub mod interp;
+pub mod json;
 pub mod lexer;
+pub mod module;
 pub mod number;
 pub mod object;
 pub mod ops;
@@ -31,7 +33,7 @@ pub use agent::Agent;
 pub use ast::SyntaxError;
 pub use completion::{Completion, JsResult, Throw};
 pub use gc::{Gc, Heap, JsString, Object, Symbol};
-pub use interp::{evaluate_script, evaluate_script_in};
+pub use interp::{evaluate_script, evaluate_script_in, evaluate_script_record};
 pub use parser::{
     DynamicFunctionKind, EvalContext, ParseOptions, RegExpValidator, parse_dynamic_function,
     parse_module, parse_script,

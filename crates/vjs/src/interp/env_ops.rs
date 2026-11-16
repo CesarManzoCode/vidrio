@@ -8,7 +8,7 @@ use std::rc::Rc;
 use crate::agent::Agent;
 use crate::bytecode::{Code, Declarations, Hidden};
 use crate::completion::JsResult;
-use crate::env::{BIND_CONST, BIND_SLOPPY_CONST, EnvKind};
+use crate::env::{BIND_CONST, BIND_IMPORT, BIND_SLOPPY_CONST, EnvKind};
 use crate::gc::{Atom, Env, Object};
 use crate::internal;
 use crate::object::PropertyDescriptor;
@@ -134,6 +134,8 @@ pub fn get_binding_value(
 ) -> JsResult<Value> {
     match found {
         Found::Slot(e, i) | Found::GlobalLexical(e, i) => {
+            // An import binding reads the binding it points to.
+            let (e, i) = agent.heap.env(e).import_target(i).unwrap_or((e, i));
             let slot = agent.heap.env(e).slots[i as usize];
             match slot {
                 Some(v) => Ok(v),
@@ -223,7 +225,7 @@ fn set_slot(
     if agent.heap.env(e).slots[i as usize].is_none() {
         return tdz_error(agent, name);
     }
-    if flags & BIND_CONST != 0 {
+    if flags & (BIND_CONST | BIND_IMPORT) != 0 {
         return agent.type_error("assignment to constant variable");
     }
     if flags & BIND_SLOPPY_CONST != 0 {

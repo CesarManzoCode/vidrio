@@ -1020,6 +1020,20 @@ fn exec(agent: &mut Agent, frame: &mut Frame, op: Op) -> JsResult<Step> {
         Op::PopHandler => {
             frame.handlers.pop();
         }
+        Op::ImportMeta => {
+            let meta = crate::module::import_meta(agent)?;
+            frame.push(Value::Object(meta));
+        }
+        Op::ImportCall { options } => {
+            let options = if options {
+                frame.pop()
+            } else {
+                Value::Undefined
+            };
+            let specifier = frame.pop();
+            let p = crate::module::evaluate_import_call(agent, specifier, options)?;
+            frame.push(p);
+        }
         Op::ThrowTypeError(c) => {
             let msg = const_message(agent, frame, c);
             return agent.type_error(&msg);

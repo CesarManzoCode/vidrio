@@ -495,6 +495,8 @@ pub enum ObjectKind {
     ArrayIterator(Box<ArrayIteratorData>),
     /// `%AsyncFromSyncIteratorPrototype%` instance: `[[SyncIteratorRecord]]`.
     AsyncFromSyncIterator(Box<IteratorRecord>),
+    /// A Script Record or Module Record (never exposed to code).
+    Module(Box<crate::module::ModuleRecord>),
 }
 
 impl ObjectKind {
@@ -550,6 +552,7 @@ impl ObjectKind {
             ObjectKind::ForInIterator(f) => f.trace(tracer),
             ObjectKind::ArrayIterator(a) => a.trace(tracer),
             ObjectKind::AsyncFromSyncIterator(r) => r.trace(tracer),
+            ObjectKind::Module(m) => m.trace(tracer),
         }
     }
 
@@ -597,6 +600,7 @@ impl ObjectData {
             | ObjectKind::NativeFunction(_)
             | ObjectKind::BoundFunction(_) => true,
             ObjectKind::Proxy(p) => p.callable,
+            ObjectKind::Host(h) => h.is_callable(),
             _ => false,
         }
     }

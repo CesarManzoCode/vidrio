@@ -27,6 +27,7 @@
 
 mod expr;
 mod func;
+pub mod module;
 mod pattern;
 mod scan;
 mod stmt;
@@ -41,7 +42,7 @@ use crate::bigint::BigInt;
 use crate::bytecode::{
     Code, CodeKind, Declarations, EvalSite, FunctionFlags, Hidden, Op, SourceText, TemplateSite,
 };
-use crate::env::{BIND_CONST, BIND_SLOPPY_CONST, BIND_TDZ, ScopeNames};
+use crate::env::{BIND_CONST, BIND_IMPORT, BIND_SLOPPY_CONST, BIND_TDZ, ScopeNames};
 use crate::gc::Atom;
 use crate::value::Value;
 
@@ -81,6 +82,7 @@ pub(crate) enum ScopeKind {
     Eval,
 }
 
+#[derive(Clone)]
 pub(crate) struct Scope {
     pub kind: ScopeKind,
     /// The scope has an environment at run time.
@@ -503,7 +505,8 @@ impl<'a> Compiler<'a> {
                     continue;
                 }
                 if let Some(slot) = scope.find(name) {
-                    if dynamic {
+                    // Import bindings are indirect: read them by name.
+                    if dynamic || scope.flags[slot] & BIND_IMPORT != 0 {
                         return Binding::Dynamic;
                     }
                     return Binding::Local {
@@ -576,7 +579,7 @@ impl<'a> Compiler<'a> {
             });
             return;
         }
-        if h == Hidden::This && self.fr().kind == CodeKind::Script {
+        if h == Hidden::This && matches!(self.fr().kind, CodeKind::Script | CodeKind::Module) {
             self.emit(Op::LoadThis);
             return;
         }

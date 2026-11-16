@@ -354,6 +354,13 @@ pub enum Op {
     /// moves to the target.
     PushHandler(u32),
     PopHandler,
+    /// `[] → [meta]`: the `import.meta` object of the active module.
+    ImportMeta,
+    /// `[specifier options?] → [promise]`: EvaluateImportCall; the options
+    /// operand is on the stack only when the flag is set.
+    ImportCall {
+        options: bool,
+    },
     /// Throws a TypeError with message `consts[i]`.
     ThrowTypeError(u32),
     /// Throws a ReferenceError with message `consts[i]`.
@@ -610,6 +617,8 @@ pub struct TemplateSite {
 pub enum CodeKind {
     Script,
     Eval,
+    /// The init or body code of a module.
+    Module,
     /// Any function body, including class field initializers and static
     /// blocks.
     Function,

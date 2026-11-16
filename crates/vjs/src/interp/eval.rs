@@ -8,7 +8,7 @@ use crate::bytecode::EvalSite;
 use crate::compiler::{compile_eval, compile_script};
 use crate::completion::JsResult;
 use crate::function::NativeCall;
-use crate::gc::{Env, Realm};
+use crate::gc::{Env, Object, Realm};
 use crate::interp::{Frame, FrameKind, global_env, run};
 use crate::parser::{EvalContext, ParseOptions, parse_script};
 use crate::value::Value;
@@ -32,11 +32,24 @@ pub fn evaluate_script(agent: &mut Agent, source: &str) -> JsResult<Value> {
 
 /// [`evaluate_script`] in a given realm.
 pub fn evaluate_script_in(agent: &mut Agent, realm: Realm, source: &str) -> JsResult<Value> {
+    evaluate_script_record(agent, realm, source, None)
+}
+
+/// [`evaluate_script`] in a given realm with a Script Record (see
+/// [`crate::module::create_script_record`]) as its `[[ScriptOrModule]]`,
+/// the referrer of its `import()` calls. With `None` the script has no
+/// record of its own and `import()` uses the active script or module.
+pub fn evaluate_script_record(
+    agent: &mut Agent,
+    realm: Realm,
+    source: &str,
+    script: Option<Object>,
+) -> JsResult<Value> {
     let options = ParseOptions::default();
     agent.push_context(crate::agent::ExecutionContext {
         realm,
         function: None,
-        script_or_module: None,
+        script_or_module: script,
     });
     let result = (|| {
         let program = match parse_script(source, &options) {
@@ -46,6 +59,7 @@ pub fn evaluate_script_in(agent: &mut Agent, realm: Realm, source: &str) -> JsRe
         let code = compile_script(agent, &program, Rc::from(source));
         let env = global_env(agent, realm);
         let mut frame = Frame::new(code, env, realm, FrameKind::Script);
+        frame.script_or_module = script;
         frame.this = match agent.heap.env(env).kind {
             crate::env::EnvKind::Global(ref g) => Some(g.this),
             _ => None,
@@ -88,7 +102,10 @@ pub(crate) fn prepare_eval(
         Err(e) => return throw_syntax_error(agent, &e),
     };
     let code = compile_eval(agent, &program, Rc::from(source.as_str()), site);
-    Ok(Ok(Frame::new(code, env, realm, FrameKind::Eval)))
+    let mut frame = Frame::new(code, env, realm, FrameKind::Eval);
+    // The eval context's ScriptOrModule is that of the running context.
+    frame.script_or_module = agent.active_script_or_module();
+    Ok(Ok(frame))
 }
 
 /// `eval(x)` called indirectly (`%eval%`).

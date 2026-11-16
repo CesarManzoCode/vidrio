@@ -390,15 +390,18 @@ fn call_inner(agent: &mut Agent, f: Object, this: Value, args: &[Value]) -> JsRe
         Native(NativeFn, Realm),
         Bound(Object, Value, Vec<Value>),
         Proxy,
+        Host(Rc<dyn crate::exotic::HostObject>),
     }
     let target = match &agent.heap.object(f).kind {
         ObjectKind::BytecodeFunction(_) => Target::Bytecode,
         ObjectKind::NativeFunction(data) => Target::Native(data.behavior, data.realm),
         ObjectKind::BoundFunction(data) => Target::Bound(data.target, data.this, data.args.clone()),
         ObjectKind::Proxy(_) => Target::Proxy,
+        ObjectKind::Host(h) if h.is_callable() => Target::Host(h.clone()),
         _ => return agent.type_error("not a function"),
     };
     match target {
+        Target::Host(h) => h.call(agent, f, this, args),
         Target::Bytecode => {
             let Some(evaluator) = agent.evaluator else {
                 return agent.type_error("bytecode execution is not available");
@@ -455,6 +458,7 @@ fn construct_inner(
         Native(NativeFn, Realm),
         Bound(Object, Vec<Value>),
         Proxy,
+        Host(Rc<dyn crate::exotic::HostObject>),
     }
     let target = match &agent.heap.object(f).kind {
         ObjectKind::BytecodeFunction(_) => Target::Bytecode,

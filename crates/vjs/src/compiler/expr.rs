@@ -366,16 +366,16 @@ impl Compiler<'_> {
             }
             ExprKind::NewTarget => self.load_hidden(Hidden::NewTarget),
             ExprKind::ImportMeta => {
-                self.throw_type_error("import.meta is only available in module code");
+                self.emit(Op::ImportMeta);
             }
             ExprKind::ImportCall { specifier, options } => {
                 self.expr(specifier);
-                self.emit(Op::Pop);
                 if let Some(o) = options {
                     self.expr(o);
-                    self.emit(Op::Pop);
                 }
-                self.throw_type_error("dynamic import is not available");
+                self.emit(Op::ImportCall {
+                    options: options.is_some(),
+                });
             }
         }
     }

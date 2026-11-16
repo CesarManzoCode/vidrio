@@ -182,6 +182,10 @@ pub struct Agent {
     /// Interpreter frames on all run loops (see `interp::MAX_FRAME_DEPTH`).
     pub(crate) frame_depth: usize,
     gc_requested: bool,
+    /// The host's module hooks (HostLoadImportedModule and friends).
+    pub module_host: Option<Rc<dyn crate::module::ModuleHost>>,
+    /// Module records, pending loads and dynamic imports.
+    pub(crate) modules: crate::module::ModuleState,
 }
 
 impl Default for Agent {
@@ -199,6 +203,7 @@ struct AgentRoots<'a> {
     jobs: &'a VecDeque<Job>,
     host_tasks: &'a VecDeque<Job>,
     kept_alive: &'a [WeakKey],
+    modules: &'a crate::module::ModuleState,
 }
 
 impl Trace for AgentRoots<'_> {
@@ -214,6 +219,7 @@ impl Trace for AgentRoots<'_> {
         self.jobs.trace(tracer);
         self.host_tasks.trace(tracer);
         self.kept_alive.trace(tracer);
+        self.modules.trace(tracer);
     }
 }
 
@@ -234,6 +240,8 @@ impl Agent {
             nested_calls: 0,
             frame_depth: 0,
             gc_requested: false,
+            module_host: None,
+            modules: crate::module::ModuleState::default(),
         }
     }
 
@@ -249,6 +257,12 @@ impl Agent {
 
     pub fn running_context(&self) -> Option<&ExecutionContext> {
         self.contexts.last()
+    }
+
+    /// GetActiveScriptOrModule: the Script or Module Record of the topmost
+    /// execution context that has one.
+    pub fn active_script_or_module(&self) -> Option<Object> {
+        self.contexts.iter().rev().find_map(|c| c.script_or_module)
     }
 
     /// The current Realm Record: that of the running execution context, or
@@ -465,6 +479,7 @@ impl Agent {
             jobs: &self.jobs,
             host_tasks: &self.host_tasks,
             kept_alive: &self.kept_alive,
+            modules: &self.modules,
         };
         let mut all: Vec<&dyn Trace> = Vec::with_capacity(extra_roots.len() + 1);
         all.push(&roots);

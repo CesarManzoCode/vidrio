@@ -34,7 +34,7 @@ use crate::gc::{Env, Object, Realm, Trace, Tracer};
 use crate::object::ObjectKind;
 use crate::value::Value;
 
-pub use eval::{evaluate_script, evaluate_script_in};
+pub use eval::{evaluate_script, evaluate_script_in, evaluate_script_record};
 use promise::Capability;
 
 /// Frames deeper than this (across all run loops) throw a RangeError.

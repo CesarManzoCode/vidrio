@@ -111,6 +111,22 @@ pub trait HostObject: InternalMethods + Trace + Any {
     fn is_htmldda(&self) -> bool {
         false
     }
+
+    /// Whether the object has a `[[Call]]` internal method.
+    fn is_callable(&self) -> bool {
+        false
+    }
+
+    /// `[[Call]]` of a callable host object.
+    fn call(
+        &self,
+        agent: &mut Agent,
+        _o: Object,
+        _this: Value,
+        _args: &[Value],
+    ) -> JsResult<Value> {
+        agent.type_error("not a function")
+    }
 }
 
 pub(crate) struct OrdinaryMethods;

@@ -24,6 +24,10 @@ pub const BIND_CONST: u8 = 2;
 pub const BIND_SLOPPY_CONST: u8 = 4;
 /// Lexically declared (conflicts with `var` declarations of `eval` code).
 pub const BIND_LEXICAL: u8 = 8;
+/// Import binding of a module environment: an immutable indirect binding
+/// whose target is recorded in [`EnvData::imports`]. The compiler resolves
+/// these by name so that every read goes through the indirection.
+pub const BIND_IMPORT: u8 = 16;
 
 /// Names and flags of the slots of a declarative environment.
 #[derive(Debug, Default)]
@@ -88,6 +92,9 @@ pub struct EnvData {
     /// Deletable `var` and function bindings that a non-strict direct
     /// `eval` added to this VariableEnvironment.
     pub eval_vars: Option<Box<Vec<(Atom, Value)>>>,
+    /// Indirect bindings of a module environment (CreateImportBinding):
+    /// `(slot, target environment, target slot)`.
+    pub imports: Option<Box<Vec<(u32, Env, u32)>>>,
 }
 
 impl EnvData {
@@ -97,6 +104,7 @@ impl EnvData {
             slots: vec![None; slots],
             kind: EnvKind::Declarative(None),
             eval_vars: None,
+            imports: None,
         }
     }
 
@@ -119,6 +127,7 @@ impl EnvData {
             slots,
             kind: EnvKind::Declarative(Some(names)),
             eval_vars: None,
+            imports: None,
         }
     }
 
@@ -142,6 +151,7 @@ impl EnvData {
                 var_names: Vec::new(),
             })),
             eval_vars: None,
+            imports: None,
         }
     }
 
@@ -152,7 +162,17 @@ impl EnvData {
             slots: Vec::new(),
             kind: EnvKind::Object { object, with },
             eval_vars: None,
+            imports: None,
         }
+    }
+
+    /// The target of the indirect binding in `slot`, if it is one.
+    pub fn import_target(&self, slot: u32) -> Option<(Env, u32)> {
+        self.imports
+            .as_ref()?
+            .iter()
+            .find(|(s, _, _)| *s == slot)
+            .map(|&(_, e, t)| (e, t))
     }
 
     pub fn is_var_scope(&self) -> bool {
@@ -190,6 +210,11 @@ impl Trace for EnvData {
             for (a, v) in vars.iter() {
                 tracer.atom(*a);
                 tracer.value(*v);
+            }
+        }
+        if let Some(imports) = &self.imports {
+            for (_, e, _) in imports.iter() {
+                tracer.env(*e);
             }
         }
     }

@@ -28,3 +28,5 @@ Fuente única de lo que el proyecto no demuestra. Ningún otro archivo los repit
 - El texto que recibe `eval` se pasa al parser como UTF-8: un sustituto UTF-16 suelto dentro de ese texto se convierte en U+FFFD antes de analizarlo.
 - En vjs, la expresión `extends` de una clase ve los nombres privados de la propia clase; la especificación la evalúa con el entorno privado exterior.
 - En vjs, una referencia a un enlace declarativo que solo se resuelve por nombre (con `with` o `eval` directo no estricto de por medio) se vuelve a resolver al asignar, en vez de fijarse antes de evaluar el lado derecho; solo se nota si el lado derecho borra un `var` creado por `eval`.
+- En vjs, los Script Records y Module Records viven mientras viva el agente: el estado de módulos los enraíza todos, como un mapa de módulos que nunca se vacía.
+- `$262.agent.broadcast` del binario `vjs` espera solo a los agentes que siguen vivos; un agente que termina su script sin llamar a `receiveBroadcast` sale y no recibe mensajes.
