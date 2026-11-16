@@ -459,6 +459,7 @@ fn to_string(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
             ObjectKind::Boolean(_) => "Boolean",
             ObjectKind::Number(_) => "Number",
             ObjectKind::String(_) => "String",
+            ObjectKind::RegExp(_) => "RegExp",
             _ => "Object",
         }
     };

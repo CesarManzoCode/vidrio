@@ -915,16 +915,7 @@ fn exec(agent: &mut Agent, frame: &mut Frame, op: Op) -> JsResult<Step> {
         Op::RegExp { pattern, flags } => {
             let p = frame.code.consts[pattern as usize];
             let f = frame.code.consts[flags as usize];
-            let realm = agent.current_realm();
-            let Some(ctor) = agent
-                .heap
-                .realm(realm)
-                .intrinsics
-                .try_get(Intrinsic::RegExp)
-            else {
-                return agent.syntax_error("regular expressions are not available");
-            };
-            let o = ops::construct(agent, ctor, &[p, f], None)?;
+            let o = crate::builtins::regexp::regexp_create(agent, p, f)?;
             frame.push(Value::Object(o));
         }
 

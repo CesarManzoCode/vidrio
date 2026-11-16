@@ -15,7 +15,7 @@ use crate::function::{
 use crate::gc::Realm;
 use crate::object::{Attributes, ObjectKind, Slot};
 use crate::ops::{self, ListElementTypes};
-use crate::parser::{DynamicFunctionKind, ParseOptions, parse_dynamic_function};
+use crate::parser::{DynamicFunctionKind, parse_dynamic_function};
 use crate::realm::Intrinsic;
 use crate::string::utf16;
 use crate::value::{PropertyKey, Value};
@@ -136,7 +136,7 @@ pub fn create_dynamic_function(
     }
     let body = ops::to_string(agent, body_arg)?;
     let body = agent.heap.string_to_rust(body);
-    let options = ParseOptions::default();
+    let options = crate::regexp::parse_options();
     let (function, source) = match parse_dynamic_function(kind, &params, &body, &options) {
         Ok(parsed) => parsed,
         Err(e) => return agent.syntax_error(&e.message),

@@ -180,10 +180,9 @@ pub(crate) fn is_regexp(agent: &mut Agent, v: Value) -> JsResult<bool> {
     Ok(has_regexp_matcher(agent, o))
 }
 
-/// Whether `o` has a `[[RegExpMatcher]]` internal slot. No object kind has
-/// one until RegExp objects exist.
-fn has_regexp_matcher(_agent: &Agent, _o: Object) -> bool {
-    false
+/// Whether `o` has a `[[RegExpMatcher]]` internal slot.
+fn has_regexp_matcher(agent: &Agent, o: Object) -> bool {
+    crate::builtins::regexp::is_regexp_object(agent, o)
 }
 
 /// RegExpCreate(P, F) through `%RegExp%`: converting the pattern to a

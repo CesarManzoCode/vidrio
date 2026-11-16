@@ -1,8 +1,8 @@
 //! The core built-ins (ECMA-262 §19–§20, §28): `Object`, `Function` and the
 //! dynamic function constructors, the errors, `Symbol`, `Boolean`,
 //! `Reflect`, `Proxy`, the function properties of the global object, and
-//! the numeric built-ins `Number`, `BigInt` and `Math` (§21), and `String`
-//! (§22.1).
+//! the numeric built-ins `Number`, `BigInt` and `Math` (§21), `String`
+//! (§22.1) and `RegExp` (§22.2).
 //!
 //! Every property gets the attributes, `length` and `name` the
 //! specification gives it: methods are `{ writable, !enumerable,
@@ -16,6 +16,7 @@ pub mod math;
 pub mod number;
 pub mod object;
 pub mod reflect;
+pub mod regexp;
 pub mod string;
 pub mod symbol;
 
@@ -42,6 +43,7 @@ pub fn install(agent: &mut Agent, realm: Realm) {
     number::install(agent, realm);
     math::install(agent, realm);
     string::install(agent, realm);
+    regexp::install(agent, realm);
 }
 
 pub(crate) fn intrinsic(agent: &Agent, realm: Realm, which: Intrinsic) -> Object {

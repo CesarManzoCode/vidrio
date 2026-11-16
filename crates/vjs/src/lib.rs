@@ -25,6 +25,7 @@ pub mod ops;
 pub mod parser;
 pub mod proxy;
 pub mod realm;
+pub mod regexp;
 pub mod shape;
 pub mod string;
 pub mod unicode;

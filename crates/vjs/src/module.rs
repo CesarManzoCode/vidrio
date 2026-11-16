@@ -32,7 +32,7 @@ use crate::interp::promise::{self, Capability};
 use crate::interp::{Frame, FrameKind, global_env, run};
 use crate::object::ObjectKind;
 use crate::ops;
-use crate::parser::{ParseOptions, parse_module};
+use crate::parser::parse_module;
 use crate::value::{PropertyKey, Value};
 
 // ----- records -----
@@ -578,7 +578,7 @@ pub fn parse_module_record(
     source: &str,
     host_defined: Option<Rc<str>>,
 ) -> Result<Object, SyntaxError> {
-    let program = parse_module(source, &ParseOptions::default())?;
+    let program = parse_module(source, &crate::regexp::parse_options())?;
     let entries = module_entries(&program);
     let code = compile_module(agent, &program, Rc::from(source));
     let slots = code

@@ -45,7 +45,7 @@ pub fn evaluate_script_record(
     source: &str,
     script: Option<Object>,
 ) -> JsResult<Value> {
-    let options = ParseOptions::default();
+    let options = crate::regexp::parse_options();
     agent.push_context(crate::agent::ExecutionContext {
         realm,
         function: None,
@@ -95,7 +95,7 @@ pub(crate) fn prepare_eval(
             class_field_initializer: site.class_field_initializer,
             private_names: site.private_names.clone(),
         }),
-        ..ParseOptions::default()
+        ..crate::regexp::parse_options()
     };
     let program = match parse_script(&source, &options) {
         Ok(p) => p,

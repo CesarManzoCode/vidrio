@@ -10,6 +10,7 @@ use std::mem::size_of;
 use std::rc::Rc;
 
 use crate::buffer::{ArrayBufferData, TypedArrayData};
+use crate::builtins::regexp::{RegExpData, RegExpStringIteratorData};
 use crate::builtins::string::StringIteratorData;
 use crate::exotic::{ArgumentsData, HostObject, NamespaceData};
 use crate::function::{BoundFunctionData, BytecodeFunctionData, NativeFunctionData};
@@ -496,6 +497,12 @@ pub enum ObjectKind {
     ArrayIterator(Box<ArrayIteratorData>),
     /// `%StringIteratorPrototype%` instance (CreateStringIterator).
     StringIterator(Box<StringIteratorData>),
+    /// RegExp object: `[[OriginalSource]]`, `[[OriginalFlags]]` and
+    /// `[[RegExpMatcher]]`.
+    RegExp(Box<RegExpData>),
+    /// `%RegExpStringIteratorPrototype%` instance
+    /// (CreateRegExpStringIterator).
+    RegExpStringIterator(Box<RegExpStringIteratorData>),
     /// `%AsyncFromSyncIteratorPrototype%` instance: `[[SyncIteratorRecord]]`.
     AsyncFromSyncIterator(Box<IteratorRecord>),
     /// A Script Record or Module Record (never exposed to code).
@@ -555,6 +562,8 @@ impl ObjectKind {
             ObjectKind::ForInIterator(f) => f.trace(tracer),
             ObjectKind::ArrayIterator(a) => a.trace(tracer),
             ObjectKind::StringIterator(s) => s.trace(tracer),
+            ObjectKind::RegExp(r) => r.trace(tracer),
+            ObjectKind::RegExpStringIterator(r) => r.trace(tracer),
             ObjectKind::AsyncFromSyncIterator(r) => r.trace(tracer),
             ObjectKind::Module(m) => m.trace(tracer),
         }
