@@ -460,6 +460,7 @@ fn to_string(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
             ObjectKind::Number(_) => "Number",
             ObjectKind::String(_) => "String",
             ObjectKind::RegExp(_) => "RegExp",
+            ObjectKind::Date(_) => "Date",
             _ => "Object",
         }
     };

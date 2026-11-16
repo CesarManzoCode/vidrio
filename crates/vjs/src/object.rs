@@ -556,6 +556,11 @@ pub enum ObjectKind {
     FromAsync(Box<FromAsyncData>),
     /// An object made by `JSON.rawJSON`: `[[IsRawJSON]]`.
     RawJson,
+    /// A Date object: `[[DateValue]]` (a time value or NaN).
+    Date(f64),
+    /// A Temporal object (Duration, Instant, PlainDate, PlainTime or
+    /// PlainDateTime) and its internal slots.
+    Temporal(Box<crate::builtins::temporal::TemporalSlots>),
 }
 
 impl ObjectKind {
@@ -585,6 +590,8 @@ impl ObjectKind {
             | ObjectKind::Error
             | ObjectKind::UnmappedArguments
             | ObjectKind::RawJson
+            | ObjectKind::Date(_)
+            | ObjectKind::Temporal(_)
             | ObjectKind::WeakMap(_)
             | ObjectKind::WeakSet(_)
             | ObjectKind::WeakRef(_)

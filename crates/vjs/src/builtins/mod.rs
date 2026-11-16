@@ -6,7 +6,8 @@
 //! the keyed collections (§24), the weak references (§26), and the
 //! structured data of §25 and §23.2: `ArrayBuffer`, `SharedArrayBuffer`,
 //! `DataView`, `Atomics` and the TypedArrays, `JSON` (§25.5) and the
-//! `Promise` statics and prototype methods beyond `then` (§27.2).
+//! `Promise` statics and prototype methods beyond `then` (§27.2), `Date`
+//! (§21.4) and the `Temporal` namespace with the ISO 8601 calendar.
 //!
 //! Every property gets the attributes, `length` and `name` the
 //! specification gives it: methods are `{ writable, !enumerable,
@@ -18,6 +19,7 @@ pub mod array_buffer;
 pub mod atomics;
 pub mod collections;
 pub mod data_view;
+pub mod date;
 pub mod error;
 pub mod function;
 pub mod global;
@@ -31,6 +33,7 @@ pub mod reflect;
 pub mod regexp;
 pub mod string;
 pub mod symbol;
+pub mod temporal;
 pub mod typed_array;
 pub mod weak;
 
@@ -70,6 +73,8 @@ pub fn install(agent: &mut Agent, realm: Realm) {
     atomics::install(agent, realm);
     json::install(agent, realm);
     promise::install(agent, realm);
+    date::install(agent, realm);
+    temporal::install(agent, realm);
 }
 
 pub(crate) fn intrinsic(agent: &Agent, realm: Realm, which: Intrinsic) -> Object {
