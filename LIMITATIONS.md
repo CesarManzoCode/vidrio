@@ -32,3 +32,4 @@ Fuente única de lo que el proyecto no demuestra. Ningún otro archivo los repit
 - `$262.agent.broadcast` del binario `vjs` espera solo a los agentes que siguen vivos; un agente que termina su script sin llamar a `receiveBroadcast` sale y no recibe mensajes.
 - Los BigInt de vjs tienen un tope de 2^30 bits (`MAX_BIGINT_BITS`): una operación cuyo resultado lo pasaría (`**`, `<<`, `BigInt.asUintN` de un negativo con muchos bits) lanza `RangeError`. La multiplicación y la conversión a cadena son cuadráticas, así que operar cerca del tope es lento.
 - `Math.random` de vjs usa xorshift64* sembrado con el reloj; no es criptográfico.
+- vjs no tiene datos de locale: `toLocaleLowerCase` y `toLocaleUpperCase` ignoran el locale (sin las reglas de turco, azerí y lituano de `SpecialCasing.txt`), y `localeCompare` compara por unidades de código las formas NFC de las dos cadenas, no con el orden de cotejo de Unicode (UCA).

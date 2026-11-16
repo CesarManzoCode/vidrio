@@ -10,6 +10,7 @@ use std::mem::size_of;
 use std::rc::Rc;
 
 use crate::buffer::{ArrayBufferData, TypedArrayData};
+use crate::builtins::string::StringIteratorData;
 use crate::exotic::{ArgumentsData, HostObject, NamespaceData};
 use crate::function::{BoundFunctionData, BytecodeFunctionData, NativeFunctionData};
 use crate::gc::{Heap, HeapBigInt, JsString, Object, Realm, Shape, Symbol, Trace, Tracer};
@@ -493,6 +494,8 @@ pub enum ObjectKind {
     /// `%ForInIteratorPrototype%` instance (CreateForInIterator).
     ForInIterator(Box<ForInData>),
     ArrayIterator(Box<ArrayIteratorData>),
+    /// `%StringIteratorPrototype%` instance (CreateStringIterator).
+    StringIterator(Box<StringIteratorData>),
     /// `%AsyncFromSyncIteratorPrototype%` instance: `[[SyncIteratorRecord]]`.
     AsyncFromSyncIterator(Box<IteratorRecord>),
     /// A Script Record or Module Record (never exposed to code).
@@ -551,6 +554,7 @@ impl ObjectKind {
             ObjectKind::Generator(g) => g.trace(tracer),
             ObjectKind::ForInIterator(f) => f.trace(tracer),
             ObjectKind::ArrayIterator(a) => a.trace(tracer),
+            ObjectKind::StringIterator(s) => s.trace(tracer),
             ObjectKind::AsyncFromSyncIterator(r) => r.trace(tracer),
             ObjectKind::Module(m) => m.trace(tracer),
         }
