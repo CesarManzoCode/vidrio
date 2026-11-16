@@ -9,7 +9,7 @@ use crate::gc::{Env, Object};
 use crate::internal;
 use crate::interp::env_ops::{self, Found};
 use crate::interp::generator::{self, MODE_NEXT, MODE_RETURN, MODE_THROW};
-use crate::interp::{Frame, Handler, Step, Suspend, eval, function, iter, operators};
+use crate::interp::{Frame, FrameKind, Handler, Step, Suspend, eval, function, iter, operators};
 use crate::object::{Attributes, ObjectKind, PropertyDescriptor, Slot};
 use crate::ops::{self, IntegrityLevel, IteratorRecord, ListElementTypes};
 use crate::realm::Intrinsic;
@@ -483,21 +483,34 @@ fn exec(agent: &mut Agent, frame: &mut Frame, op: Op) -> JsResult<Step> {
         }
         Op::GlobalDeclInit(i) => {
             let code = frame.code.clone();
-            env_ops::global_declaration_instantiation(
+            let enabled = env_ops::global_declaration_instantiation(
                 agent,
                 frame.env,
                 &code,
                 &code.decls[i as usize],
             )?;
+            for (reg, on) in enabled {
+                frame.regs[reg as usize] = Value::Boolean(on);
+            }
         }
         Op::EvalDeclInit(i) => {
             let code = frame.code.clone();
-            env_ops::eval_declaration_instantiation(
+            let enabled = env_ops::eval_declaration_instantiation(
                 agent,
                 frame.env,
                 &code,
                 &code.decls[i as usize],
             )?;
+            for (reg, on) in enabled {
+                frame.regs[reg as usize] = Value::Boolean(on);
+            }
+        }
+        Op::AnnexBCopy { name, reg } => {
+            let f = frame.pop();
+            if reg == u32::MAX || frame.regs[reg as usize] == Value::Boolean(true) {
+                let name = frame.code.atoms[name as usize];
+                env_ops::set_var_binding(agent, frame.env, name, f)?;
+            }
         }
         Op::InitThisFields => {
             if let (Some(Value::Object(this)), Some(f)) = (frame.this, frame.function) {
@@ -926,6 +939,28 @@ fn exec(agent: &mut Agent, frame: &mut Frame, op: Op) -> JsResult<Step> {
             let this = frame.pop();
             let f = frame.pop();
             return Ok(call(agent, f, this, args)?.into_step(frame));
+        }
+        Op::TailCall(_) | Op::TailCallArray => {
+            let args = match op {
+                Op::TailCall(argc) => {
+                    let at = frame.stack.len() - argc as usize;
+                    frame.stack.split_off(at)
+                }
+                _ => {
+                    let arr = frame.pop();
+                    list_of(agent, arr)?
+                }
+            };
+            let this = frame.pop();
+            let f = frame.pop();
+            let replaceable = frame.kind == FrameKind::Call
+                && frame.generator.is_none()
+                && frame.async_cap.is_none()
+                && frame.handlers.is_empty();
+            return Ok(match call(agent, f, this, args)? {
+                Called::Frame(new_frame) if replaceable => Step::TailCall(Box::new(new_frame)),
+                called => called.into_step(frame),
+            });
         }
         Op::CallArray => {
             let arr = frame.pop();
@@ -1644,7 +1679,7 @@ fn dispose_step(agent: &mut Agent, stack: Value) -> JsResult<Option<Value>> {
 }
 
 /// A SuppressedError with `error` and `suppressed`.
-fn suppressed_error(agent: &mut Agent, error: Value, suppressed: Value) -> Object {
+pub(crate) fn suppressed_error(agent: &mut Agent, error: Value, suppressed: Value) -> Object {
     let realm = agent.current_realm();
     let proto = agent
         .heap

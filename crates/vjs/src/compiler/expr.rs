@@ -5,11 +5,11 @@ use crate::ast::{
     MethodKind, Pattern, PatternKind, Property, PropertyKey, PropertyKind, Template, UnaryOp,
     UpdateOp,
 };
-use crate::bytecode::{ClassName, Hidden, MethodOp, Op};
+use crate::bytecode::{ClassName, CodeKind, Hidden, MethodOp, Op};
 use crate::compiler::func::FnName;
 use crate::compiler::pattern::Prepared;
 use crate::compiler::stmt::BindMode;
-use crate::compiler::{Binding, Compiler};
+use crate::compiler::{Binding, Compiler, Control};
 use crate::number::number_to_string;
 
 pub(crate) fn method_op(kind: MethodKind) -> MethodOp {
@@ -98,6 +98,92 @@ pub(crate) fn static_key_name(key: &PropertyKey) -> Option<String> {
 }
 
 impl Compiler<'_> {
+    /// Whether a `return` here is in tail position (ECMA-262 §15.10.2):
+    /// strict, non-async, non-generator function code that is not a class
+    /// constructor, with no `try`, `using` or `for-of` around it.
+    fn tail_calls_allowed(&self) -> bool {
+        let fs = self.fr();
+        let flags = &fs.info.flags;
+        fs.strict
+            && fs.kind == CodeKind::Function
+            && !flags.is_async
+            && !flags.is_generator
+            && !flags.is_class_constructor
+            && !fs.info.field_init
+            && !fs.info.static_block
+            && fs.using_regs.is_empty()
+            && fs.control.iter().all(|c| match c {
+                Control::Scope => true,
+                Control::Breakable { iter, .. } => iter.is_none(),
+                _ => false,
+            })
+    }
+
+    /// The operand of `return` (or a concise arrow body): calls in tail
+    /// position become `TailCall`.
+    pub(crate) fn tail_expr(&mut self, e: &Expr) {
+        if self.tail_calls_allowed() {
+            self.tail_position(e);
+        } else {
+            self.expr(e);
+        }
+    }
+
+    fn tail_position(&mut self, e: &Expr) {
+        match &e.kind {
+            ExprKind::Paren(inner) => self.tail_position(inner),
+            ExprKind::Call {
+                optional: false, ..
+            } => {
+                self.expr(e);
+                if let Some(last) = self.fs().ops.last_mut() {
+                    match *last {
+                        Op::Call(argc) => *last = Op::TailCall(argc),
+                        Op::CallArray => *last = Op::TailCallArray,
+                        _ => {}
+                    }
+                }
+            }
+            ExprKind::Logical { op, left, right } => {
+                self.expr(left);
+                let end = self.new_label();
+                let jump = match op {
+                    LogicalOp::And => Op::JumpIfFalseKeep(0),
+                    LogicalOp::Or => Op::JumpIfTrueKeep(0),
+                    LogicalOp::Coalesce => Op::JumpIfNotNullishKeep(0),
+                };
+                self.emit_jump(jump, end);
+                self.tail_position(right);
+                self.bind(end);
+            }
+            ExprKind::Conditional {
+                test,
+                consequent,
+                alternate,
+            } => {
+                self.expr(test);
+                let (alt, end) = (self.new_label(), self.new_label());
+                self.emit_jump(Op::JumpIfFalse(0), alt);
+                self.tail_position(consequent);
+                self.jump(end);
+                self.bind(alt);
+                self.tail_position(alternate);
+                self.bind(end);
+            }
+            ExprKind::Sequence(list) => {
+                for (i, x) in list.iter().enumerate() {
+                    if i + 1 < list.len() {
+                        self.expr(x);
+                        self.emit(Op::Pop);
+                    } else {
+                        self.tail_position(x);
+                    }
+                }
+            }
+            _ => self.expr(e),
+        }
+    }
+
     pub(crate) fn number(&mut self, n: f64) {
         if n.fract() == 0.0 && n.abs() < 2_147_483_648.0 && !(n == 0.0 && n.is_sign_negative()) {
             self.emit(Op::Int(n as i32));

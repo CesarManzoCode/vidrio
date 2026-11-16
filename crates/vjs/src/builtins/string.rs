@@ -1,6 +1,6 @@
 //! `String` (ECMA-262 §22.1): the constructor, `fromCharCode`,
-//! `fromCodePoint` and `raw`, every method of `String.prototype` except the
-//! HTML methods of Annex B, and `%StringIteratorPrototype%`. String exotic
+//! `fromCodePoint` and `raw`, every method of `String.prototype` including
+//! the HTML methods of Annex B.2.2.2–14, and `%StringIteratorPrototype%`. String exotic
 //! objects themselves are in `crate::exotic` and `crate::internal`.
 //!
 //! Case mapping and normalization use the Unicode 17.0.0 tables of
@@ -66,6 +66,9 @@ pub(crate) fn install(agent: &mut Agent, realm: Realm) {
         ("valueOf", to_string, 0),
     ];
     for &(name, f, length) in methods {
+        method(agent, realm, proto, name, f, length);
+    }
+    for &(name, f, length) in HTML_METHODS {
         method(agent, realm, proto, name, f, length);
     }
     // Annex B: trimLeft and trimRight are the same function objects as
@@ -868,6 +871,72 @@ fn substring(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     };
     let (from, to) = (start.min(end), start.max(end));
     Ok(Value::String(agent.heap.substring(s, from, to)))
+}
+
+/// CreateHTML(string, tag, attribute, value) (§B.2.2.2.1).
+fn create_html(
+    agent: &mut Agent,
+    call: &NativeCall<'_>,
+    tag: &str,
+    attribute: &str,
+) -> JsResult<Value> {
+    let s = this_string(agent, call.this)?;
+    let mut out: Vec<u16> = Vec::new();
+    out.push(u16::from(b'<'));
+    out.extend(tag.encode_utf16());
+    if !attribute.is_empty() {
+        let v = ops::to_string(agent, call.arg(0))?;
+        out.push(u16::from(b' '));
+        out.extend(attribute.encode_utf16());
+        out.extend("=\"".encode_utf16());
+        for &c in agent.heap.string_units(v) {
+            if c == u16::from(b'"') {
+                out.extend("&quot;".encode_utf16());
+            } else {
+                out.push(c);
+            }
+        }
+        out.push(u16::from(b'"'));
+    }
+    out.push(u16::from(b'>'));
+    out.extend_from_slice(agent.heap.string_units(s));
+    out.extend("</".encode_utf16());
+    out.extend(tag.encode_utf16());
+    out.push(u16::from(b'>'));
+    if out.len() > MAX_STRING_LENGTH {
+        return agent.range_error("string too long");
+    }
+    Ok(Value::String(agent.heap.alloc_string_owned(out)))
+}
+
+macro_rules! html_methods {
+    ($($fn_name:ident = $name:literal, $tag:literal, $attribute:literal, $length:literal;)*) => {
+        $(
+            fn $fn_name(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+                create_html(agent, &call, $tag, $attribute)
+            }
+        )*
+        /// The HTML methods of `String.prototype` (§B.2.2.2–14).
+        const HTML_METHODS: &[(&str, crate::function::NativeFn, u32)] = &[
+            $(($name, $fn_name, $length),)*
+        ];
+    };
+}
+
+html_methods! {
+    html_anchor = "anchor", "a", "name", 1;
+    html_big = "big", "big", "", 0;
+    html_blink = "blink", "blink", "", 0;
+    html_bold = "bold", "b", "", 0;
+    html_fixed = "fixed", "tt", "", 0;
+    html_fontcolor = "fontcolor", "font", "color", 1;
+    html_fontsize = "fontsize", "font", "size", 1;
+    html_italics = "italics", "i", "", 0;
+    html_link = "link", "a", "href", 1;
+    html_small = "small", "small", "", 0;
+    html_strike = "strike", "strike", "", 0;
+    html_sub = "sub", "sub", "", 0;
+    html_sup = "sup", "sup", "", 0;
 }
 
 /// `substr(start, length)` (Annex B.2.2.1).

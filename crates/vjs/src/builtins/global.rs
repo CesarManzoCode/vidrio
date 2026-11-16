@@ -1,5 +1,6 @@
 //! Function properties of the global object (ECMA-262 §19.2): `isFinite`,
-//! `isNaN`, `parseFloat`, `parseInt` and the URI functions. `eval` is
+//! `isNaN`, `parseFloat`, `parseInt`, the URI functions and the Annex
+//! B.2.1 functions `escape` and `unescape`. `eval` is
 //! created with the interpreter's intrinsics; `globalThis` and the value
 //! properties by SetDefaultGlobalBindings.
 
@@ -15,7 +16,7 @@ use crate::realm::Intrinsic;
 use crate::value::Value;
 
 pub(crate) fn install(agent: &mut Agent, realm: Realm) {
-    let functions: [(Intrinsic, &str, crate::function::NativeFn, u32); 8] = [
+    let functions: [(Intrinsic, &str, crate::function::NativeFn, u32); 10] = [
         (Intrinsic::IsFinite, "isFinite", is_finite, 1),
         (Intrinsic::IsNaN, "isNaN", is_nan, 1),
         (Intrinsic::ParseFloat, "parseFloat", parse_float, 1),
@@ -34,6 +35,8 @@ pub(crate) fn install(agent: &mut Agent, realm: Realm) {
             decode_uri_component,
             1,
         ),
+        (Intrinsic::Escape, "escape", escape, 1),
+        (Intrinsic::Unescape, "unescape", unescape, 1),
     ];
     for (which, name, f, length) in functions {
         let func = builtin_function(agent, realm, name, f, length);
@@ -339,5 +342,88 @@ mod tests {
         assert_eq!(p("."), None);
         assert_eq!(p("e5"), None);
         assert_eq!(p("0x10").as_deref(), Some("0"));
+    }
+}
+
+/// The code units that `escape` leaves alone: ASCII letters, digits and
+/// `@*_+-./`.
+fn escape_keeps(c: u16) -> bool {
+    u8::try_from(c).is_ok_and(|b| b.is_ascii_alphanumeric() || b"@*_+-./".contains(&b))
+}
+
+/// `escape(string)` (§B.2.1.1).
+fn escape(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let s = ops::to_string(agent, call.arg(0))?;
+    let units = agent.heap.string_units(s).to_vec();
+    let out = escape_units(&units);
+    Ok(Value::String(agent.heap.alloc_string_owned(out)))
+}
+
+pub(crate) fn escape_units(units: &[u16]) -> Vec<u16> {
+    let mut out = Vec::with_capacity(units.len());
+    for &c in units {
+        if escape_keeps(c) {
+            out.push(c);
+        } else if c < 256 {
+            out.extend(format!("%{c:02X}").encode_utf16());
+        } else {
+            out.extend(format!("%u{c:04X}").encode_utf16());
+        }
+    }
+    out
+}
+
+/// `unescape(string)` (§B.2.1.2).
+fn unescape(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let s = ops::to_string(agent, call.arg(0))?;
+    let units = agent.heap.string_units(s).to_vec();
+    let out = unescape_units(&units);
+    Ok(Value::String(agent.heap.alloc_string_owned(out)))
+}
+
+pub(crate) fn unescape_units(units: &[u16]) -> Vec<u16> {
+    let hex = |i: usize, n: usize| -> Option<u16> {
+        let digits = units.get(i..i + n)?;
+        digits
+            .iter()
+            .try_fold(0u16, |acc, &d| Some(acc << 4 | u16::from(hex_digit(d)?)))
+    };
+    let mut out = Vec::with_capacity(units.len());
+    let mut k = 0;
+    while k < units.len() {
+        let c = units[k];
+        if c == u16::from(b'%') {
+            if units.get(k + 1) == Some(&u16::from(b'u')) {
+                if let Some(v) = hex(k + 2, 4) {
+                    out.push(v);
+                    k += 6;
+                    continue;
+                }
+            } else if let Some(v) = hex(k + 1, 2) {
+                out.push(v);
+                k += 3;
+                continue;
+            }
+        }
+        out.push(c);
+        k += 1;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{escape_units, unescape_units};
+
+    fn u(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
+    #[test]
+    fn escape_and_unescape_round_trip() {
+        assert_eq!(escape_units(&u("a b+\u{e9}\u{3042}")), u("a%20b+%E9%u3042"));
+        assert_eq!(unescape_units(&u("%41%u0042%zz%u12")), u("AB%zz%u12"));
+        let all: Vec<u16> = (0..=0x2FFu16).collect();
+        assert_eq!(unescape_units(&escape_units(&all)), all);
     }
 }

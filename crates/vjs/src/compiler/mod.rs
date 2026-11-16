@@ -177,6 +177,17 @@ pub(crate) enum Binding {
     Dynamic,
 }
 
+/// An Annex B.3.2 block-level function: evaluating its declaration copies
+/// the block binding to the var binding `name`. `reg` holds, for script
+/// and eval code, whether the declaration instantiation enabled the copy;
+/// `None` (function code) copies to the static var binding.
+#[derive(Clone, Debug)]
+pub(crate) struct AnnexBSite {
+    pub name: String,
+    pub start: u32,
+    pub reg: Option<u32>,
+}
+
 /// What kind of function a [`FnState`] compiles.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FnInfo {
@@ -221,6 +232,8 @@ pub(crate) struct FnState {
     /// Registers of the disposable resource stacks of the open `using`
     /// blocks.
     pub using_regs: Vec<u32>,
+    /// The Annex B.3.2 block-level functions of this code.
+    pub annex_b: Vec<AnnexBSite>,
 }
 
 impl FnState {
@@ -251,6 +264,7 @@ impl FnState {
             fn_scope: None,
             this_in_slot: false,
             using_regs: Vec::new(),
+            annex_b: Vec::new(),
         }
     }
 

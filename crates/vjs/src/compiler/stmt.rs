@@ -1,8 +1,8 @@
 //! Statements, declarations and the prologues of script and eval code.
 
 use crate::ast::{
-    CatchClause, Expr, ForHead, ForInit, Pattern, PatternKind, Program, Stmt, StmtKind, SwitchCase,
-    VarDecl, VarKind,
+    CatchClause, Expr, ForHead, ForInit, Function, Pattern, PatternKind, Program, ScopeInfo, Stmt,
+    StmtKind, SwitchCase, VarDecl, VarKind,
 };
 use crate::bytecode::{CodeKind, Declarations, Op};
 use crate::compiler::scan::{
@@ -10,7 +10,8 @@ use crate::compiler::scan::{
     top_lexical_declarations, using_kind,
 };
 use crate::compiler::{
-    BreakKind, Compiler, Control, FinallyInfo, Scope, ScopeKind, bound_names, lexical_flags,
+    AnnexBSite, BreakKind, Compiler, Control, FinallyInfo, Scope, ScopeKind, bound_names,
+    lexical_flags,
 };
 
 /// How a pattern stores its values.
@@ -65,7 +66,8 @@ impl Compiler<'_> {
         let labels = std::mem::take(&mut self.fs().pending_labels);
         let completion = self.fr().completion;
         match &s.kind {
-            StmtKind::Empty | StmtKind::Function(_) => {}
+            StmtKind::Empty => {}
+            StmtKind::Function(f) => self.annex_b_copy(f),
             StmtKind::Debugger => {
                 self.emit(Op::Debugger);
             }
@@ -102,13 +104,13 @@ impl Compiler<'_> {
                 self.expr(test);
                 let else_label = self.new_label();
                 self.emit_jump(Op::JumpIfFalse(0), else_label);
-                self.stmt(consequent);
+                self.clause(consequent);
                 match alternate {
                     Some(alt) => {
                         let end = self.new_label();
                         self.jump(end);
                         self.bind(else_label);
-                        self.stmt(alt);
+                        self.clause(alt);
                         self.bind(end);
                     }
                     None => self.bind(else_label),
@@ -165,7 +167,7 @@ impl Compiler<'_> {
             }
             StmtKind::Return(arg) => {
                 match arg {
-                    Some(e) => self.expr(e),
+                    Some(e) => self.tail_expr(e),
                     None => {
                         self.emit(Op::Undefined);
                     }
@@ -224,6 +226,52 @@ impl Compiler<'_> {
         });
         self.stmt(body);
         self.fs().control.pop();
+    }
+
+    /// The clause of an `if`: a function declaration there (Annex B.3.3)
+    /// is compiled as the only statement of a block.
+    fn clause(&mut self, s: &Stmt) {
+        if matches!(s.kind, StmtKind::Function(_)) {
+            self.block(std::slice::from_ref(s));
+        } else {
+            self.stmt(s);
+        }
+    }
+
+    /// Annex B.3.2: evaluating a block-level function declaration copies
+    /// the function from its block binding to the var binding of the same
+    /// name.
+    fn annex_b_copy(&mut self, f: &Function) {
+        let start = f.span.start;
+        let Some(site) = self.fr().annex_b.iter().find(|s| s.start == start).cloned() else {
+            return;
+        };
+        self.load_name(&site.name);
+        if let Some(reg) = site.reg {
+            let name = self.atom(&site.name);
+            self.emit(Op::AnnexBCopy { name, reg });
+            return;
+        }
+        let fs = self.fr();
+        let target = fs
+            .scopes
+            .iter()
+            .rposition(|s| s.var_scope)
+            .and_then(|i| fs.scopes[i].find(&site.name).map(|slot| (i, slot as u32)));
+        match target {
+            Some((i, slot)) => {
+                let hops = fs.scopes[i + 1..].iter().filter(|s| s.materialized).count() as u32;
+                self.emit(Op::SetLocal { hops, slot });
+                self.emit(Op::Pop);
+            }
+            None => {
+                let name = self.atom(&site.name);
+                self.emit(Op::AnnexBCopy {
+                    name,
+                    reg: u32::MAX,
+                });
+            }
+        }
     }
 
     /// A block statement: its own scope if it declares anything lexical.
@@ -803,7 +851,7 @@ impl Compiler<'_> {
 
     /// GlobalDeclarationInstantiation data and the global code prologue.
     pub(crate) fn global_prologue(&mut self, program: &Program) {
-        let decls = self.collect_declarations(&program.body, &program.scope.var_names);
+        let decls = self.collect_declarations(&program.body, &program.scope);
         let fs = self.fs();
         fs.decls.push(decls);
         let idx = (fs.decls.len() - 1) as u32;
@@ -812,7 +860,8 @@ impl Compiler<'_> {
 
     /// Var names, functions and lexical declarations of a script or a
     /// sloppy eval body (the function code is compiled here).
-    fn collect_declarations(&mut self, body: &[Stmt], var_names: &[String]) -> Declarations {
+    fn collect_declarations(&mut self, body: &[Stmt], scope: &ScopeInfo) -> Declarations {
+        let var_names = &scope.var_names;
         let functions = functions_to_initialize(&hoisted_functions(body));
         let function_names: Vec<String> = functions
             .iter()
@@ -836,6 +885,26 @@ impl Compiler<'_> {
             let a = self.agent.heap.intern_str(&name);
             decls.lexical.push((a, kind == LexKind::Const));
         }
+        // Annex B.3.2.2 and B.3.2.3: one register per name says whether the
+        // instantiation enabled the var binding of its block functions.
+        let mut sites = Vec::new();
+        for (name, start) in &scope.annex_b_functions {
+            let a = self.agent.heap.intern_str(name);
+            let reg = match decls.annex_b.iter().find(|(n, _)| *n == a) {
+                Some(&(_, reg)) => reg,
+                None => {
+                    let reg = self.alloc_reg();
+                    decls.annex_b.push((a, reg));
+                    reg
+                }
+            };
+            sites.push(AnnexBSite {
+                name: name.clone(),
+                start: *start,
+                reg: Some(reg),
+            });
+        }
+        self.fs().annex_b = sites;
         decls
     }
 
@@ -871,7 +940,7 @@ impl Compiler<'_> {
         // The variable environment of the caller receives new bindings.
         scope.tainted = true;
         self.push_scope(scope);
-        let decls = self.collect_declarations(&program.body, &program.scope.var_names);
+        let decls = self.collect_declarations(&program.body, &program.scope);
         let fs = self.fs();
         fs.decls.push(decls);
         let idx = (fs.decls.len() - 1) as u32;

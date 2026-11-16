@@ -129,7 +129,19 @@ pub(crate) struct Scope {
     functions: HashSet<String>,
     /// The parameter of a `catch (e)` with a simple binding.
     catch_param: Option<String>,
+    /// Formal parameter names (function scopes).
+    params: HashSet<String>,
+    /// Annex B.3.2 candidates: block-level functions declared here (`own`)
+    /// or in a nested block, waiting for the check that replacing each
+    /// with `var F` would produce no early error.
+    annex_b: Vec<AnnexBCandidate>,
     info: ScopeInfo,
+}
+
+struct AnnexBCandidate {
+    name: String,
+    start: u32,
+    own: bool,
 }
 
 impl Scope {
@@ -140,8 +152,21 @@ impl Scope {
             lexical: HashSet::new(),
             functions: HashSet::new(),
             catch_param: None,
+            params: HashSet::new(),
+            annex_b: Vec::new(),
             info: ScopeInfo::default(),
         }
+    }
+
+    /// `var name` declared inside a nested block would clash with a
+    /// declaration of this scope.
+    fn blocks_annex_b(&self, name: &str) -> bool {
+        if self.flags & VAR_SCOPE != 0 {
+            return self.lexical.contains(name) || self.params.contains(name);
+        }
+        let catch_param =
+            self.flags & SIMPLE_CATCH != 0 && self.catch_param.as_deref() == Some(name);
+        (self.lexical.contains(name) && !catch_param) || self.functions.contains(name)
     }
 }
 
@@ -474,7 +499,43 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn exit_scope(&mut self) -> ScopeInfo {
-        self.scopes.pop().map(|s| s.info).unwrap_or_default()
+        let Some(mut scope) = self.scopes.pop() else {
+            return ScopeInfo::default();
+        };
+        // Annex B.3.2: the candidates that survive every scope between their
+        // block and the var scope get a var binding there.
+        let candidates = std::mem::take(&mut scope.annex_b);
+        let survivors: Vec<AnnexBCandidate> = candidates
+            .into_iter()
+            .filter(|c| c.own || !scope.blocks_annex_b(&c.name))
+            .collect();
+        if scope.flags & VAR_SCOPE != 0 {
+            for c in survivors {
+                scope.info.annex_b_functions.push((c.name, c.start));
+            }
+        } else if let Some(parent) = self.scopes.last_mut() {
+            parent.annex_b.extend(
+                survivors
+                    .into_iter()
+                    .map(|c| AnnexBCandidate { own: false, ..c }),
+            );
+        }
+        scope.info
+    }
+
+    /// Records a sloppy-mode block-level function declaration as an Annex
+    /// B.3.2 candidate of the current (block) scope.
+    pub(crate) fn annex_b_candidate(&mut self, name: &str, start: u32) {
+        if self.strict || self.functions_as_var() {
+            return;
+        }
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.annex_b.push(AnnexBCandidate {
+                name: name.to_string(),
+                start,
+                own: true,
+            });
+        }
     }
 
     pub(crate) fn scope_flags(&self) -> u32 {
@@ -553,6 +614,9 @@ impl<'a> Parser<'a> {
                     }
                     if flags & VAR_SCOPE != 0 {
                         let scope = &mut self.scopes[i];
+                        if bind == Bind::Param {
+                            scope.params.insert(name.to_string());
+                        }
                         if bind == Bind::Var && !scope.info.var_names.iter().any(|v| v == name) {
                             scope.info.var_names.push(name.to_string());
                         }

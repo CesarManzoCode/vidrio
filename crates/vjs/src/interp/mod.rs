@@ -6,6 +6,10 @@
 //! callbacks of built-ins, `Function.prototype.call`, bound functions,
 //! proxies) go through `[[Call]]`, which starts a nested `run`.
 //!
+//! A call in tail position of strict code (`Op::TailCall`) replaces the
+//! caller's frame instead of pushing one, so tail recursion runs in
+//! constant frame depth.
+//!
 //! Generators, async functions and async generators keep their frame in
 //! their object while suspended; resuming moves the frame back onto a run
 //! loop.
@@ -16,7 +20,7 @@
 
 pub mod env_ops;
 pub mod eval;
-mod exec;
+pub(crate) mod exec;
 pub mod function;
 pub mod generator;
 pub mod intrinsics;
@@ -179,6 +183,9 @@ impl Frame {
 pub(crate) enum Step {
     Next,
     Call(Box<Frame>),
+    /// A call in tail position (strict mode, ECMA-262 §15.10.3): the new
+    /// frame replaces the running one, which has nothing left to do.
+    TailCall(Box<Frame>),
     Return(Value),
     Suspend(Suspend),
 }
@@ -264,6 +271,14 @@ fn run_loop(agent: &mut Agent, frames: &mut Vec<Frame>) -> JsResult<Value> {
                 push_context(agent, &new_frame);
                 frames.push(*new_frame);
                 agent.frame_depth += 1;
+            }
+            Ok(Step::TailCall(new_frame)) => {
+                // The replaced frame is a plain call frame without
+                // handlers: finishing it would only hand the result on.
+                frames.pop();
+                agent.pop_context();
+                push_context(agent, &new_frame);
+                frames.push(*new_frame);
             }
             Ok(Step::Return(v)) => {
                 if let Some(r) = complete_frame(agent, frames, Ok(v)) {

@@ -441,7 +441,7 @@ pub fn global_declaration_instantiation(
     env: Env,
     code: &Rc<Code>,
     decls: &Declarations,
-) -> JsResult<()> {
+) -> JsResult<Vec<(u32, bool)>> {
     let global = global_parts(agent, env);
     for &(name, _) in &decls.lexical {
         if has_var_name(agent, env, name) || has_lexical(agent, env, name) {
@@ -482,6 +482,23 @@ pub fn global_declaration_instantiation(
             return agent.type_error(&format!("cannot declare global variable '{n}'"));
         }
     }
+    // Annex B.3.2.2.
+    let mut declared = var_like;
+    let mut enabled = Vec::new();
+    for &(name, reg) in &decls.annex_b {
+        let mut on = false;
+        if !has_lexical(agent, env, name) {
+            let key = name_key(agent, name);
+            if can_declare_global_var(agent, global, key)? {
+                if !declared.contains(&name) {
+                    create_global_var_binding(agent, env, name, false)?;
+                    declared.push(name);
+                }
+                on = true;
+            }
+        }
+        enabled.push((reg, on));
+    }
     for &(name, is_const) in &decls.lexical {
         let data = agent.heap.env_mut(env);
         let slot = data.slots.len() as u32;
@@ -501,7 +518,15 @@ pub fn global_declaration_instantiation(
     for &name in &decls.var_names {
         create_global_var_binding(agent, env, name, false)?;
     }
-    Ok(())
+    Ok(enabled)
+}
+
+/// SetMutableBinding of `name` in the VariableEnvironment seen from `env`
+/// (Annex B.3.2 evaluation of a block-level function declaration).
+pub fn set_var_binding(agent: &mut Agent, env: Env, name: Atom, value: Value) -> JsResult<()> {
+    let var_env = var_env_of(agent, env);
+    let found = lookup(agent, var_env, name)?;
+    set_binding(agent, found, name, value, false)
 }
 
 /// The VariableEnvironment seen from `env`: the nearest var scope.
@@ -538,7 +563,7 @@ pub fn eval_declaration_instantiation(
     lex_env: Env,
     code: &Rc<Code>,
     decls: &Declarations,
-) -> JsResult<()> {
+) -> JsResult<Vec<(u32, bool)>> {
     let outer = agent
         .heap
         .env(lex_env)
@@ -595,6 +620,46 @@ pub fn eval_declaration_instantiation(
             }
         }
     }
+    // Annex B.3.2.3.
+    let mut declared = var_like;
+    let mut enabled = Vec::new();
+    for &(name, reg) in &decls.annex_b {
+        let mut binding_exists = false;
+        let mut this_env = lex_env;
+        while this_env != var_env {
+            let data = agent.heap.env(this_env);
+            if !matches!(data.kind, EnvKind::Object { .. })
+                && declarative_has(agent, this_env, name)
+            {
+                binding_exists = true;
+            }
+            match agent.heap.env(this_env).outer {
+                Some(o) => this_env = o,
+                None => break,
+            }
+        }
+        let definable = if !binding_exists && is_global {
+            if has_lexical(agent, var_env, name) {
+                false
+            } else {
+                let global = global_parts(agent, var_env);
+                let key = name_key(agent, name);
+                can_declare_global_var(agent, global, key)?
+            }
+        } else {
+            true
+        };
+        let on = !binding_exists && definable;
+        if on && !declared.contains(&name) {
+            if is_global {
+                create_global_var_binding(agent, var_env, name, true)?;
+            } else if !declarative_has(agent, var_env, name) {
+                add_eval_var(agent, var_env, name, Value::Undefined);
+            }
+            declared.push(name);
+        }
+        enabled.push((reg, on));
+    }
     for &(name, idx) in &decls.functions {
         let f = super::function::make_closure(agent, &code.functions[idx as usize], lex_env, None);
         let fv = Value::Object(f);
@@ -614,7 +679,7 @@ pub fn eval_declaration_instantiation(
             add_eval_var(agent, var_env, name, Value::Undefined);
         }
     }
-    Ok(())
+    Ok(enabled)
 }
 
 fn add_eval_var(agent: &mut Agent, env: Env, name: Atom, value: Value) {

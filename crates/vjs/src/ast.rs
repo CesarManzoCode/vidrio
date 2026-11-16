@@ -105,6 +105,10 @@ pub struct ScopeInfo {
     pub var_names: Vec<String>,
     /// Lexically scoped names at the top level of the body.
     pub lexical_names: Vec<String>,
+    /// Annex B.3.2: sloppy-mode function declarations in blocks (and in
+    /// `if` clauses) that also get a `var` binding in this scope: the name
+    /// and the start of the function's source text.
+    pub annex_b_functions: Vec<(String, u32)>,
 }
 
 /// An identifier with its StringValue (escapes resolved).

@@ -2,8 +2,8 @@
 //! TZif reader (`crate::tz`), `Date.parse` of the Date Time String Format
 //! and of the formats `toString` and `toUTCString` produce, the getters
 //! and setters, the string forms and `@@toPrimitive`, plus
-//! `toTemporalInstant` (Temporal proposal). `getYear`, `setYear` and
-//! `toGMTString` (Annex B) are not here.
+//! `toTemporalInstant` (Temporal proposal), and the Annex B.2.3 methods
+//! `getYear`, `setYear` and `toGMTString`.
 
 use crate::agent::Agent;
 use crate::builtins::{
@@ -87,6 +87,16 @@ pub(crate) fn install(agent: &mut Agent, realm: Realm) {
     ];
     for (name, f, length) in methods {
         method(agent, realm, proto, name, f, length);
+    }
+    method(agent, realm, proto, "getYear", get_year, 0);
+    method(agent, realm, proto, "setYear", set_year, 1);
+    // §B.2.3.3: toGMTString is the same function object as toUTCString.
+    let utc_key = agent.heap.key_from_str("toUTCString");
+    if let Some((_, crate::object::Slot::Data(f @ Value::Object(_)))) =
+        agent.heap.get_own(proto, utc_key)
+    {
+        let gmt_key = agent.heap.key_from_str("toGMTString");
+        value(agent, proto, gmt_key, f, true, false, true);
     }
     // Date.prototype[@@toPrimitive] is { !writable, !enumerable,
     // configurable }.
@@ -374,6 +384,32 @@ fn get_timezone_offset(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Valu
         return Ok(Value::Number(f64::NAN));
     }
     Ok(Value::Number((t - local_time(t)) / MS_PER_MINUTE))
+}
+
+/// `getYear()` (§B.2.3.1).
+fn get_year(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let t = this_time_value(agent, call.this)?;
+    if t.is_nan() {
+        return Ok(Value::Number(f64::NAN));
+    }
+    Ok(Value::Number(ymd(local_time(t)).0 - 1900.0))
+}
+
+/// `setYear(year)` (§B.2.3.2).
+fn set_year(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let (o, t) = this_date(agent, call.this)?;
+    let y = ops::to_number(agent, call.arg(0))?;
+    let t = if t.is_nan() { 0.0 } else { local_time(t) };
+    let year = make_full_year(y);
+    let tv = if year.is_nan() {
+        f64::NAN
+    } else {
+        let (_, month, date) = ymd(t);
+        let d = make_day(year, month, date);
+        time_clip(utc_time(make_date(d, time_within_day(t))))
+    };
+    set_time_value(agent, o, tv);
+    Ok(Value::Number(tv))
 }
 
 // ----- Setters -----

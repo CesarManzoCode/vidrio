@@ -231,14 +231,32 @@ impl<'a> Parser<'a> {
                 "generator declarations are not allowed in this context",
             ));
         }
+        let hanging = ctx == Ctx::If;
+        // Annex B.3.3: `if (x) function f() {}` behaves as if the function
+        // were the only declaration of a block.
+        if hanging {
+            self.enter_scope(0);
+        }
         let function = self.parse_function(
             start,
             is_async,
             FnSite::Declaration {
-                hanging: ctx == Ctx::If,
+                hanging,
                 default_export: false,
             },
         )?;
+        let plain = !function.is_async && !function.is_generator;
+        if let Some(name) = function.name.clone() {
+            if hanging {
+                self.declare_name(&name.name, Bind::Function, name.span)?;
+            }
+            if plain && (ctx == Ctx::List || hanging) {
+                self.annex_b_candidate(&name.name, function.span.start);
+            }
+        }
+        if hanging {
+            self.exit_scope();
+        }
         Ok(self.stmt(start, StmtKind::Function(Box::new(function))))
     }
 

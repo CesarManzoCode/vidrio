@@ -133,6 +133,14 @@ pub enum Op {
     /// `[v] → []`: initializes a binding found dynamically (global
     /// lexical declarations).
     InitName(u32),
+    /// `[f] → []`: Annex B.3.2 evaluation of a block-level function
+    /// declaration: sets the binding `atoms[name]` of the
+    /// VariableEnvironment to `f` if register `reg` is true (`u32::MAX`:
+    /// always).
+    AnnexBCopy {
+        name: u32,
+        reg: u32,
+    },
     DeleteName(u32),
     /// Dynamic lookup of a hidden binding (`this` of eval or of arrow
     /// functions without a static path).
@@ -320,6 +328,13 @@ pub enum Op {
     // ----- calls -----
     /// `[f this a0..an-1] → [r]`.
     Call(u32),
+    /// Like `Call`, in tail position of strict function code: the callee's
+    /// frame replaces the current one when the current frame is a plain
+    /// call frame without handlers; otherwise it is a `Call` (a `Return`
+    /// follows).
+    TailCall(u32),
+    /// `CallArray` in tail position (see `TailCall`).
+    TailCallArray,
     /// `[f this arr] → [r]`.
     CallArray,
     /// Possible direct `eval`: `[f this a0..an-1] → [r]`.
@@ -587,6 +602,9 @@ pub struct Declarations {
     pub functions: Vec<(Atom, u32)>,
     /// Lexically declared names and whether each is constant.
     pub lexical: Vec<(Atom, bool)>,
+    /// Annex B.3.2 block-level function names and the register that
+    /// receives whether their var binding was enabled.
+    pub annex_b: Vec<(Atom, u32)>,
 }
 
 impl Trace for Declarations {
@@ -598,6 +616,9 @@ impl Trace for Declarations {
             tracer.atom(*a);
         }
         for (a, _) in &self.lexical {
+            tracer.atom(*a);
+        }
+        for (a, _) in &self.annex_b {
             tracer.atom(*a);
         }
     }

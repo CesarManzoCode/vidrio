@@ -558,6 +558,10 @@ pub enum ObjectKind {
     RawJson,
     /// A Date object: `[[DateValue]]` (a time value or NaN).
     Date(f64),
+    /// A `DisposableStack` or `AsyncDisposableStack`: `[[DisposableState]]`
+    /// and `[[DisposeCapability]]` (also the state of a running
+    /// `disposeAsync`).
+    DisposableStack(Box<crate::builtins::disposable::DisposableStackData>),
     /// A Temporal object (Duration, Instant, PlainDate, PlainTime,
     /// PlainDateTime, PlainYearMonth, PlainMonthDay or ZonedDateTime) and
     /// its internal slots.
@@ -630,6 +634,7 @@ impl ObjectKind {
             ObjectKind::IteratorHelper(h) => h.trace(tracer),
             ObjectKind::WrapForValidIterator(r) => r.trace(tracer),
             ObjectKind::FromAsync(f) => f.trace(tracer),
+            ObjectKind::DisposableStack(d) => d.trace(tracer),
         }
     }
 

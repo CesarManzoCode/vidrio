@@ -16,7 +16,8 @@ use crate::compiler::scan::{
 };
 use crate::compiler::stmt::BindMode;
 use crate::compiler::{
-    Compiler, FnInfo, FnState, SLOPPY_CONST, Scope, ScopeKind, hidden_name, lexical_flags,
+    AnnexBSite, Compiler, FnInfo, FnState, SLOPPY_CONST, Scope, ScopeKind, hidden_name,
+    lexical_flags,
 };
 use crate::env::{BIND_CONST, BIND_TDZ, ScopeNames};
 
@@ -115,7 +116,7 @@ impl Compiler<'_> {
         match &f.body {
             FunctionBody::Block(stmts) => self.function_statements(stmts),
             FunctionBody::Expr(e) => {
-                self.expr(e);
+                self.tail_expr(e);
                 self.emit_return();
             }
         }
@@ -200,6 +201,9 @@ impl Compiler<'_> {
             for v in &parts.scope.var_names {
                 scope.declare(v, 0);
             }
+            for (f, _) in &parts.scope.annex_b_functions {
+                scope.declare(f, 0);
+            }
             if !separate_lexical {
                 for (n, k) in &lexical {
                     scope.declare(n, lex_kind_flags(*k));
@@ -217,6 +221,16 @@ impl Compiler<'_> {
                 scope.hidden[h as usize] = Some(slot);
             }
         }
+        self.fs().annex_b = parts
+            .scope
+            .annex_b_functions
+            .iter()
+            .map(|(name, start)| AnnexBSite {
+                name: name.clone(),
+                start: *start,
+                reg: None,
+            })
+            .collect();
         let param_slots: Vec<u32> = names
             .iter()
             .map(|n| scope.find(n).expect("parameter slot") as u32)
@@ -286,6 +300,9 @@ impl Compiler<'_> {
             vs.tainted = !strict && has_eval;
             for v in &parts.scope.var_names {
                 vs.declare(v, 0);
+            }
+            for (f, _) in &parts.scope.annex_b_functions {
+                vs.declare(f, 0);
             }
             if !separate_lexical {
                 for (n, k) in &lexical {
