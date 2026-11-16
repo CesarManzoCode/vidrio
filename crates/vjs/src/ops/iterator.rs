@@ -181,3 +181,59 @@ pub fn iterator_to_list(agent: &mut Agent, record: &mut IteratorRecord) -> JsRes
     }
     Ok(values)
 }
+
+/// IfAbruptCloseIterator(value, iteratorRecord): closes the iterator if
+/// `result` is a throw completion and returns the (original) throw.
+pub fn if_abrupt_close_iterator<T>(
+    agent: &mut Agent,
+    record: &IteratorRecord,
+    result: JsResult<T>,
+) -> JsResult<T> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) => iterator_close(agent, record, Err(e)),
+    }
+}
+
+/// IteratorCloseAll(iters, completion): closes every iterator, in reverse
+/// order, threading the completion through.
+pub fn iterator_close_all<T>(
+    agent: &mut Agent,
+    records: &[IteratorRecord],
+    completion: JsResult<T>,
+) -> JsResult<T> {
+    let mut completion = completion;
+    for record in records.iter().rev() {
+        completion = iterator_close(agent, record, completion);
+    }
+    completion
+}
+
+/// The `primitiveHandling` argument of GetIteratorFlattenable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimitiveHandling {
+    IterateStringPrimitives,
+    RejectPrimitives,
+}
+
+/// GetIteratorFlattenable(obj, primitiveHandling).
+pub fn get_iterator_flattenable(
+    agent: &mut Agent,
+    obj: Value,
+    handling: PrimitiveHandling,
+) -> JsResult<IteratorRecord> {
+    if !obj.is_object()
+        && (handling == PrimitiveHandling::RejectPrimitives || !matches!(obj, Value::String(_)))
+    {
+        return agent.type_error("value is not an iterator or iterable object");
+    }
+    let key = PropertyKey::Symbol(agent.symbols.iterator);
+    let iterator = match get_method(agent, obj, key)? {
+        None => obj,
+        Some(method) => call(agent, method, obj, &[])?,
+    };
+    let Value::Object(iterator) = iterator else {
+        return agent.type_error("iterator is not an object");
+    };
+    get_iterator_direct(agent, iterator)
+}

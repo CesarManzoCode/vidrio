@@ -2,16 +2,20 @@
 //! dynamic function constructors, the errors, `Symbol`, `Boolean`,
 //! `Reflect`, `Proxy`, the function properties of the global object, and
 //! the numeric built-ins `Number`, `BigInt` and `Math` (§21), `String`
-//! (§22.1) and `RegExp` (§22.2).
+//! (§22.1) and `RegExp` (§22.2), `Array` (§23.1), the iterators (§27.1),
+//! the keyed collections (§24) and the weak references (§26).
 //!
 //! Every property gets the attributes, `length` and `name` the
 //! specification gives it: methods are `{ writable, !enumerable,
 //! configurable }` and constructors link to their prototypes with
 //! non-writable, non-configurable `prototype` properties.
 
+pub mod array;
+pub mod collections;
 pub mod error;
 pub mod function;
 pub mod global;
+pub mod iterator;
 pub mod math;
 pub mod number;
 pub mod object;
@@ -19,6 +23,7 @@ pub mod reflect;
 pub mod regexp;
 pub mod string;
 pub mod symbol;
+pub mod weak;
 
 use crate::agent::Agent;
 use crate::function::{
@@ -44,6 +49,10 @@ pub fn install(agent: &mut Agent, realm: Realm) {
     math::install(agent, realm);
     string::install(agent, realm);
     regexp::install(agent, realm);
+    iterator::install(agent, realm);
+    array::install(agent, realm);
+    collections::install(agent, realm);
+    weak::install(agent, realm);
 }
 
 pub(crate) fn intrinsic(agent: &Agent, realm: Realm, which: Intrinsic) -> Object {
@@ -79,6 +88,34 @@ pub(crate) fn method(
     let func = create_builtin_function(agent, f, length, key, Some(realm), None, None);
     ops::define_builtin_method(agent, target, key, func);
     func
+}
+
+/// A method `{ writable, !enumerable, configurable }` of `target` under
+/// any key (a symbol key names it `[description]`).
+pub(crate) fn method_key(
+    agent: &mut Agent,
+    realm: Realm,
+    target: Object,
+    key: PropertyKey,
+    f: NativeFn,
+    length: u32,
+) -> Object {
+    let func = create_builtin_function(agent, f, length, key, Some(realm), None, None);
+    ops::define_builtin_method(agent, target, key, func);
+    func
+}
+
+/// `get [Symbol.species]` of a constructor: returns the `this` value.
+pub(crate) fn species_getter(agent: &mut Agent, realm: Realm, ctor: Object) {
+    let key = PropertyKey::Symbol(agent.symbols.species);
+    accessor(agent, realm, ctor, key, Some(return_this), None);
+}
+
+fn return_this(
+    _agent: &mut Agent,
+    call: crate::function::NativeCall<'_>,
+) -> crate::completion::JsResult<Value> {
+    Ok(call.this)
 }
 
 /// An accessor `{ !enumerable, configurable }` of `target`; the getter is

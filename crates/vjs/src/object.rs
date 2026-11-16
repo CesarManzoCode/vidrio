@@ -10,6 +10,9 @@ use std::mem::size_of;
 use std::rc::Rc;
 
 use crate::buffer::{ArrayBufferData, TypedArrayData};
+use crate::builtins::array::FromAsyncData;
+use crate::builtins::collections::{CollectionIteratorData, MapData};
+use crate::builtins::iterator::HelperData;
 use crate::builtins::regexp::{RegExpData, RegExpStringIteratorData};
 use crate::builtins::string::StringIteratorData;
 use crate::exotic::{ArgumentsData, HostObject, NamespaceData};
@@ -383,6 +386,33 @@ impl Elements {
         }
     }
 
+    /// The lowest stored index in `from..to`.
+    fn next_index(&self, from: u32, to: u32) -> Option<u32> {
+        if from >= to {
+            return None;
+        }
+        match self {
+            Elements::Dense(v) => {
+                let end = (to as usize).min(v.len());
+                (from as usize..end)
+                    .find(|&i| v[i].is_some())
+                    .map(|i| i as u32)
+            }
+            Elements::Sparse(m) => m.range(from..to).next().map(|(k, _)| *k),
+        }
+    }
+
+    /// The highest stored index in `0..=to`.
+    fn prev_index(&self, to: u32) -> Option<u32> {
+        match self {
+            Elements::Dense(v) => {
+                let end = (to as usize).saturating_add(1).min(v.len());
+                (0..end).rev().find(|&i| v[i].is_some()).map(|i| i as u32)
+            }
+            Elements::Sparse(m) => m.range(..=to).next_back().map(|(k, _)| *k),
+        }
+    }
+
     fn trace(&self, tracer: &mut Tracer) {
         match self {
             Elements::Dense(v) => {
@@ -507,6 +537,22 @@ pub enum ObjectKind {
     AsyncFromSyncIterator(Box<IteratorRecord>),
     /// A Script Record or Module Record (never exposed to code).
     Module(Box<crate::module::ModuleRecord>),
+    /// `[[MapData]]` of a `Map`.
+    Map(Box<MapData>),
+    /// `[[SetData]]` of a `Set` (the values of the entries are unused).
+    Set(Box<MapData>),
+    /// `%MapIteratorPrototype%` instance (CreateMapIterator).
+    MapIterator(Box<CollectionIteratorData>),
+    /// `%SetIteratorPrototype%` instance (CreateSetIterator).
+    SetIterator(Box<CollectionIteratorData>),
+    /// `%IteratorHelperPrototype%` instance: the iterator helpers,
+    /// `Iterator.concat`, `Iterator.zip` and `Iterator.zipKeyed`.
+    IteratorHelper(Box<HelperData>),
+    /// `%WrapForValidIteratorPrototype%` instance: `[[Iterated]]`.
+    WrapForValidIterator(Box<IteratorRecord>),
+    /// The suspended state of an `Array.fromAsync` call (never exposed to
+    /// code).
+    FromAsync(Box<FromAsyncData>),
 }
 
 impl ObjectKind {
@@ -566,6 +612,11 @@ impl ObjectKind {
             ObjectKind::RegExpStringIterator(r) => r.trace(tracer),
             ObjectKind::AsyncFromSyncIterator(r) => r.trace(tracer),
             ObjectKind::Module(m) => m.trace(tracer),
+            ObjectKind::Map(m) | ObjectKind::Set(m) => m.trace(tracer),
+            ObjectKind::MapIterator(i) | ObjectKind::SetIterator(i) => i.trace(tracer),
+            ObjectKind::IteratorHelper(h) => h.trace(tracer),
+            ObjectKind::WrapForValidIterator(r) => r.trace(tracer),
+            ObjectKind::FromAsync(f) => f.trace(tracer),
         }
     }
 
@@ -579,6 +630,7 @@ impl ObjectKind {
                 r.cells.capacity() * size_of::<RegistryCell>()
                     + r.pending.capacity() * size_of::<Value>()
             }
+            ObjectKind::Map(m) | ObjectKind::Set(m) => m.bytes(),
             _ => 0,
         }
     }
@@ -865,6 +917,16 @@ impl Heap {
     /// down; returns the first non-configurable index that stopped it.
     pub(crate) fn truncate_elements(&mut self, o: Object, new_len: u32) -> Option<u32> {
         self.objects.get_mut(o).elements.truncate(new_len)
+    }
+
+    /// The lowest stored element index of `o` in `from..to`.
+    pub(crate) fn next_element_index(&self, o: Object, from: u32, to: u32) -> Option<u32> {
+        self.objects.get(o).elements.next_index(from, to)
+    }
+
+    /// The highest stored element index of `o` that is at most `to`.
+    pub(crate) fn prev_element_index(&self, o: Object, to: u32) -> Option<u32> {
+        self.objects.get(o).elements.prev_index(to)
     }
 
     pub fn set_proto(&mut self, o: Object, proto: Option<Object>) {
