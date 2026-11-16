@@ -46,7 +46,7 @@ use crate::env::{BIND_CONST, BIND_IMPORT, BIND_SLOPPY_CONST, BIND_TDZ, ScopeName
 use crate::gc::Atom;
 use crate::value::Value;
 
-pub(crate) use scan::{bound_names, lexical_declarations};
+pub(crate) use scan::bound_names;
 
 /// Name of the hidden binding of each [`Hidden`] value. `%` cannot start
 /// an identifier, so they never collide with source names.
@@ -983,6 +983,10 @@ pub fn compile_eval(
     c.stmts(&program.body);
     c.emit(Op::LoadCompletion);
     c.emit(Op::Return);
+    // The eval scope stays open to the end; closing it stores its layout.
+    while !c.fr().scopes.is_empty() {
+        c.pop_scope(false);
+    }
     Rc::new(c.finish_fn(None, 0, None))
 }
 

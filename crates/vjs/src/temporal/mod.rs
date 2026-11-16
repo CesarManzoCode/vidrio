@@ -546,9 +546,21 @@ pub fn round_to_increment(x: i128, increment: i128, mode: RoundingMode) -> i128 
     round_with(x, increment, mode.unsigned(x < 0))
 }
 
-/// RoundNumberToIncrementAsIfPositive.
+/// RoundNumberToIncrementAsIfPositive: the unsigned mode applies to the
+/// signed value, so `r1` is the floor even when `x` is negative.
 pub fn round_as_if_positive(x: i128, increment: i128, mode: RoundingMode) -> i128 {
-    round_with(x, increment, mode.unsigned(false))
+    let quotient = x.div_euclid(increment);
+    let remainder = x.rem_euclid(increment);
+    if remainder == 0 {
+        return x;
+    }
+    let up = rounds_up(
+        mode.unsigned(false),
+        remainder as u128,
+        increment as u128,
+        quotient.rem_euclid(2) == 0,
+    );
+    (quotient + i128::from(up)) * increment
 }
 
 fn round_with(x: i128, increment: i128, mode: Unsigned) -> i128 {

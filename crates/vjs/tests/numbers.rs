@@ -171,7 +171,7 @@ fn radix_strings_are_exact() {
     assert_eq!(number_to_string_radix(-255.0, 2), "-11111111");
     assert_eq!(number_to_string_radix(0.5, 2), "0.1");
     assert!(number_to_string_radix(0.1, 3).starts_with("0.002200220022002200220022"));
-    assert_eq!(number_to_string_radix(2f64.powi(-1074), 2).len(), 2 + 1074);
+    assert_eq!(number_to_string_radix(f64::from_bits(1), 2).len(), 2 + 1074);
     assert_eq!(
         number_to_string_radix(2f64.powi(70), 16),
         "400000000000000000"

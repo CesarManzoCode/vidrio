@@ -610,7 +610,7 @@ mod tests {
             assert_eq!(parse(&s), x, "{s}");
         }
         assert_eq!(number_to_string(1e23), "1e+23");
-        assert_eq!(number_to_string(2f64.powi(-1074)), "5e-324");
+        assert_eq!(number_to_string(f64::from_bits(1)), "5e-324");
     }
 
     #[test]

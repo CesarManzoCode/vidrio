@@ -306,7 +306,9 @@ impl<'a> Parser<'a> {
         {
             return Err(self.error(span, &format!("export '{name}' is not defined")));
         }
-        let scope = self.scopes.pop().unwrap();
+        // Leaving the top scope gives it the surviving Annex B.3.2
+        // candidates of its blocks.
+        let info = self.exit_scope();
         Ok(Program {
             span: Span::new(0, self.src.len() as u32),
             goal: if self.module {
@@ -316,7 +318,7 @@ impl<'a> Parser<'a> {
             },
             strict: self.strict,
             body,
-            scope: scope.info,
+            scope: info,
         })
     }
 

@@ -1,10 +1,10 @@
 //! Statements, declarations and the prologues of script and eval code.
 
 use crate::ast::{
-    CatchClause, Expr, ForHead, ForInit, Function, Pattern, PatternKind, Program, ScopeInfo, Stmt,
-    StmtKind, SwitchCase, VarDecl, VarKind,
+    CatchClause, Expr, ForHead, ForInit, Function, PatternKind, Program, ScopeInfo, Stmt, StmtKind,
+    SwitchCase, VarDecl, VarKind,
 };
-use crate::bytecode::{CodeKind, Declarations, Op};
+use crate::bytecode::{Declarations, Op};
 use crate::compiler::scan::{
     LexKind, functions_to_initialize, hoisted_functions, lexical_declarations,
     top_lexical_declarations, using_kind,
@@ -723,7 +723,7 @@ impl Compiler<'_> {
             None => self.jump(brk),
         }
         let using = using_kind(&all);
-        let mut body = |c: &mut Self| {
+        let body = |c: &mut Self| {
             for (i, case) in cases.iter().enumerate() {
                 c.bind(bodies[i]);
                 c.stmts(&case.body);
@@ -945,16 +945,5 @@ impl Compiler<'_> {
         fs.decls.push(decls);
         let idx = (fs.decls.len() - 1) as u32;
         self.emit(Op::EvalDeclInit(idx));
-    }
-
-    /// Whether the innermost code is global code (its top-level names are
-    /// global bindings).
-    pub(crate) fn at_global_level(&self) -> bool {
-        self.fr().kind == CodeKind::Script
-    }
-
-    /// Binds a single identifier pattern; used by parameters and `catch`.
-    pub(crate) fn bind_simple(&mut self, target: &Pattern, mode: BindMode) {
-        self.pattern(target, mode);
     }
 }

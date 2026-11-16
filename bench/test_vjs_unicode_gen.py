@@ -1,4 +1,4 @@
-"""Tests for crates/vjs/gen/unicode.py (the ID_Start/ID_Continue generator)."""
+"""Tests for crates/vjs/gen/unicode.py (the ID_Start/ID_Continue tables)."""
 
 import importlib.util
 import unittest
@@ -26,26 +26,27 @@ SAMPLE = """\
 
 class GeneratorTest(unittest.TestCase):
     def test_parse_keeps_only_identifier_properties(self):
-        tables = gen.parse(SAMPLE)
+        tables = gen.id_tables(SAMPLE)
         self.assertEqual(set(tables), {"ID_Start", "ID_Continue"})
         self.assertEqual(tables["ID_Start"], [(0x41, 0x5A), (0x61, 0x7A), (0xAA, 0xAA)])
 
     def test_merge_joins_adjacent_and_overlapping_ranges(self):
         self.assertEqual(gen.merge([(5, 6), (1, 2), (3, 4), (10, 12), (11, 11)]), [(1, 6), (10, 12)])
-        self.assertEqual(gen.parse(SAMPLE)["ID_Continue"], [(0x30, 0x39), (0x41, 0x5B), (0x61, 0x7A)])
+        self.assertEqual(gen.id_tables(SAMPLE)["ID_Continue"], [(0x30, 0x39), (0x41, 0x5B), (0x61, 0x7A)])
 
     def test_render_writes_rust_tables(self):
-        text = gen.render(gen.parse(SAMPLE))
+        text = "\n".join(gen.render_id(gen.id_tables(SAMPLE)))
         self.assertIn("pub const ID_START: &[(u32, u32)] = &[", text)
         self.assertIn("    (0x00AA, 0x00AA),", text)
         self.assertIn("pub const ID_CONTINUE: &[(u32, u32)] = &[", text)
         self.assertIn("Unicode 17.0.0", text)
 
     def test_committed_output_matches_cached_data(self):
-        if not gen.CACHE.is_file():
+        cache = gen.CACHE / f"DerivedCoreProperties-{gen.VERSION}.txt"
+        if not cache.is_file():
             self.skipTest("DerivedCoreProperties not downloaded (run crates/vjs/gen/unicode.py)")
-        expected = gen.render(gen.parse(gen.CACHE.read_text(encoding="utf-8")))
-        self.assertEqual(gen.OUT.read_text(encoding="utf-8"), expected)
+        expected = "\n".join(gen.render_id(gen.id_tables(cache.read_text(encoding="utf-8"))))
+        self.assertEqual((gen.OUT / "unicode_id.rs").read_text(encoding="utf-8"), expected)
 
 
 if __name__ == "__main__":

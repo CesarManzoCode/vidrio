@@ -412,7 +412,7 @@ pub(crate) fn unescape_units(units: &[u16]) -> Vec<u16> {
 }
 
 #[cfg(test)]
-mod tests {
+mod escape_tests {
     use super::{escape_units, unescape_units};
 
     fn u(s: &str) -> Vec<u16> {

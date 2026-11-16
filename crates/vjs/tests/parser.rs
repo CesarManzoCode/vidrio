@@ -100,7 +100,7 @@ fn declarations() {
     }
     ok_module("using x = null; await using y = null;");
     ok_script("var let = 1; let\n[a] = [1];");
-    ok_script("var using = [], of = []; using[0] = 1; for (using of of []) ;");
+    ok_script("var using = [], of = [[]]; using[0] = 1; for (using of of [0]) ;");
     ok_script("{ using\nlet = 1; var using, let; }");
 }
 

@@ -277,7 +277,7 @@ fn map_order_with_deletions_during_iteration() {
       m.forEach(function (v, k) {
         seen.push(k);
         if (k === 1) { m.delete(2); m.set(5, "e"); }
-        if (k === 3) { m.delete(3); m.set(3, "again"); }
+        if (k === 3 && v === "c") { m.delete(3); m.set(3, "again"); }
       });
       list(seen, [1, 3, 4, 5, 3], "forEach order");
       list(Array.from(m.keys()), [1, 4, 5, 3], "keys after");
@@ -307,7 +307,7 @@ fn set_order_with_deletions_during_iteration() {
       var seen = [];
       for (var v of s) {
         seen.push(v);
-        if (v === 1) { s.delete(1); s.delete(2); s.add(4); s.add(1); }
+        if (v === 1 && seen.length === 1) { s.delete(1); s.delete(2); s.add(4); s.add(1); }
       }
       list(seen, [1, 3, 4, 1], "for-of order");
       list([...s], [3, 4, 1], "final order");
@@ -332,7 +332,8 @@ fn set_methods() {
       var setLike = { size: 1, has: function (v) { return v === 2; }, keys: function () { return [2].values(); } };
       list([...a.intersection(setLike)], [2], "set-like argument");
       throws(TypeError, function () { a.union([1]); }, "arrays are not set-like");
-      throws(RangeError, function () { a.union({ size: NaN, has: function () {}, keys: function () {} }); }, "NaN size");
+      throws(TypeError, function () { a.union({ size: NaN, has: function () {}, keys: function () {} }); }, "NaN size");
+      throws(RangeError, function () { a.union({ size: -1, has: function () {}, keys: function () {} }); }, "negative size");
       "ok";
     "#);
 }

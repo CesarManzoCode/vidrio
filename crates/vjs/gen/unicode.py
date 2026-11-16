@@ -502,13 +502,20 @@ def write(name, lines):
     print(f"wrote {path.relative_to(ROOT)}")
 
 
-def render_id(derived):
+def id_tables(text):
+    """{ID_Start, ID_Continue: merged ranges} of DerivedCoreProperties.txt."""
+    derived = property_file(text)
+    return {name: derived.get(name, []) for name in ("ID_Start", "ID_Continue")}
+
+
+def render_id(tables):
+    """The lines of unicode_id.rs."""
     lines = header(
         "ID_Start and ID_Continue", "DerivedCoreProperties.txt"
     )
-    render_ranges("ID_START", derived["ID_Start"], lines)
-    render_ranges("ID_CONTINUE", derived["ID_Continue"], lines)
-    write("unicode_id.rs", lines)
+    render_ranges("ID_START", tables["ID_Start"], lines)
+    render_ranges("ID_CONTINUE", tables["ID_Continue"], lines)
+    return lines
 
 
 def render_case(data, special, fold_simple, fold_full):
@@ -661,10 +668,11 @@ def main():
     data = UnicodeData(text["UnicodeData"])
 
     derived = property_file(text["DerivedCoreProperties"])
-    for name in ("ID_Start", "ID_Continue"):
-        if not derived.get(name):
+    ids = id_tables(text["DerivedCoreProperties"])
+    for name, ranges in ids.items():
+        if not ranges:
             sys.exit(f"no ranges found for {name}")
-    render_id(derived)
+    write("unicode_id.rs", render_id(ids))
 
     special = special_casing(text["SpecialCasing"])
     fold_simple, fold_full = case_folding(text["CaseFolding"])

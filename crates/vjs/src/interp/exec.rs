@@ -284,6 +284,7 @@ fn exec(agent: &mut Agent, frame: &mut Frame, op: Op) -> JsResult<Step> {
                     _ => EnvKind::Declarative(None),
                 },
                 eval_vars: None,
+                imports: None,
             };
             frame.env = agent.heap.alloc_env_data(copy);
         }

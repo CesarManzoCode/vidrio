@@ -458,7 +458,6 @@ fn construct_inner(
         Native(NativeFn, Realm),
         Bound(Object, Vec<Value>),
         Proxy,
-        Host(Rc<dyn crate::exotic::HostObject>),
     }
     let target = match &agent.heap.object(f).kind {
         ObjectKind::BytecodeFunction(_) => Target::Bytecode,
