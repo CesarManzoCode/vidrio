@@ -1,15 +1,20 @@
 //! The `Temporal` namespace (Temporal proposal, ISO 8601 calendar only;
 //! the other calendars belong to ECMA-402): `Temporal.Duration`,
-//! `Temporal.Instant`, `Temporal.PlainDate`, `Temporal.PlainTime` and
-//! `Temporal.PlainDateTime`, with the shared abstract operations of
-//! options, property bags and conversions. The arithmetic is in
-//! `crate::temporal`.
+//! `Temporal.Instant`, `Temporal.PlainDate`, `Temporal.PlainTime`,
+//! `Temporal.PlainDateTime`, `Temporal.PlainYearMonth`,
+//! `Temporal.PlainMonthDay`, `Temporal.ZonedDateTime` and `Temporal.Now`,
+//! with the shared abstract operations of options, property bags and
+//! conversions. The arithmetic is in `crate::temporal`.
 
 pub mod duration;
 pub mod instant;
+pub mod now;
 pub mod plain_date;
 pub mod plain_date_time;
+pub mod plain_month_day;
 pub mod plain_time;
+pub mod plain_year_month;
+pub mod zoned_date_time;
 
 use crate::agent::{Agent, ErrorKind};
 use crate::bigint::BigInt;
@@ -19,22 +24,38 @@ use crate::gc::{Object, Realm};
 use crate::object::ObjectKind;
 use crate::ops::{self, PreferredType};
 use crate::realm::Intrinsic;
-use crate::temporal::parse::{self, Kind, TimeZoneString};
+use crate::temporal::parse::{self, Kind};
+use crate::temporal::zone::{Disambiguation, OffsetBehaviour, OffsetOption};
 use crate::temporal::{
     DateTime, Duration, IsoDate, Overflow, RoundingMode, ShowCalendar, TResult, TemporalError,
     Time, Unit,
 };
+
+/// A time zone identifier (an offset or an available named zone).
+pub(crate) use crate::temporal::zone::TimeZone as TimeZoneId;
 use crate::value::Value;
 
 /// The internal slots of a Temporal object. The calendar is always
 /// `iso8601`, so no slot stores it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TemporalSlots {
     Duration(Duration),
     Instant(i128),
     PlainDate(IsoDate),
     PlainTime(Time),
     PlainDateTime(DateTime),
+    /// `[[ISODate]]` with the reference day.
+    PlainYearMonth(IsoDate),
+    /// `[[ISODate]]` with the reference year.
+    PlainMonthDay(IsoDate),
+    ZonedDateTime(ZonedSlots),
+}
+
+/// The internal slots of a ZonedDateTime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ZonedSlots {
+    pub ns: i128,
+    pub tz: TimeZoneId,
 }
 
 pub(crate) fn install(agent: &mut Agent, realm: Realm) {
@@ -47,6 +68,10 @@ pub(crate) fn install(agent: &mut Agent, realm: Realm) {
     plain_date::install(agent, realm, temporal);
     plain_time::install(agent, realm, temporal);
     plain_date_time::install(agent, realm, temporal);
+    plain_year_month::install(agent, realm, temporal);
+    plain_month_day::install(agent, realm, temporal);
+    zoned_date_time::install(agent, realm, temporal);
+    now::install(agent, realm, temporal);
 }
 
 // ----- Errors and slots -----
@@ -66,7 +91,7 @@ pub(crate) fn tr<T>(agent: &mut Agent, r: TResult<T>) -> JsResult<T> {
 pub(crate) fn slots(agent: &Agent, v: Value) -> Option<TemporalSlots> {
     match v {
         Value::Object(o) => match &agent.heap.object(o).kind {
-            ObjectKind::Temporal(s) => Some(**s),
+            ObjectKind::Temporal(s) => Some((**s).clone()),
             _ => None,
         },
         _ => None,
@@ -177,6 +202,70 @@ pub(crate) fn create_duration(
     Ok(Value::Object(o))
 }
 
+/// ISOYearMonthWithinLimits(isoDate).
+pub(crate) fn year_month_within_limits(date: IsoDate) -> bool {
+    !(date.year < -271_821
+        || date.year > 275_760
+        || (date.year == -271_821 && date.month < 4)
+        || (date.year == 275_760 && date.month > 9))
+}
+
+/// CreateTemporalYearMonth(isoDate, calendar, newTarget).
+pub(crate) fn create_year_month(
+    agent: &mut Agent,
+    date: IsoDate,
+    new_target: Option<Object>,
+) -> JsResult<Value> {
+    if !year_month_within_limits(date) {
+        return agent.range_error("year-month outside the supported range");
+    }
+    let o = create(
+        agent,
+        TemporalSlots::PlainYearMonth(date),
+        new_target,
+        Intrinsic::TemporalPlainYearMonthPrototype,
+    )?;
+    Ok(Value::Object(o))
+}
+
+/// CreateTemporalMonthDay(isoDate, calendar, newTarget).
+pub(crate) fn create_month_day(
+    agent: &mut Agent,
+    date: IsoDate,
+    new_target: Option<Object>,
+) -> JsResult<Value> {
+    if !date.within_limits() {
+        return agent.range_error("month-day outside the supported range");
+    }
+    let o = create(
+        agent,
+        TemporalSlots::PlainMonthDay(date),
+        new_target,
+        Intrinsic::TemporalPlainMonthDayPrototype,
+    )?;
+    Ok(Value::Object(o))
+}
+
+/// CreateTemporalZonedDateTime(epochNanoseconds, timeZone, calendar,
+/// newTarget).
+pub(crate) fn create_zoned(
+    agent: &mut Agent,
+    ns: i128,
+    tz: TimeZoneId,
+    new_target: Option<Object>,
+) -> JsResult<Value> {
+    if !crate::temporal::is_valid_epoch_ns(ns) {
+        return agent.range_error("instant outside the supported range");
+    }
+    let o = create(
+        agent,
+        TemporalSlots::ZonedDateTime(ZonedSlots { ns, tz }),
+        new_target,
+        Intrinsic::TemporalZonedDateTimePrototype,
+    )?;
+    Ok(Value::Object(o))
+}
+
 // ----- BigInt epoch nanoseconds -----
 
 pub(crate) fn bigint_from_i128(agent: &mut Agent, n: i128) -> Value {
@@ -277,6 +366,52 @@ pub(crate) fn overflow_option(agent: &mut Agent, o: Object) -> JsResult<Overflow
         match get_string_option(agent, o, "overflow", &["constrain", "reject"])?.as_deref() {
             Some("reject") => Overflow::Reject,
             _ => Overflow::Constrain,
+        },
+    )
+}
+
+/// GetTemporalDisambiguationOption(options).
+pub(crate) fn disambiguation_option(agent: &mut Agent, o: Object) -> JsResult<Disambiguation> {
+    let allowed = ["compatible", "earlier", "later", "reject"];
+    Ok(get_string_option(agent, o, "disambiguation", &allowed)?
+        .and_then(|s| Disambiguation::from_name(&s))
+        .unwrap_or(Disambiguation::Compatible))
+}
+
+/// GetTemporalOffsetOption(options, fallback).
+pub(crate) fn offset_option(
+    agent: &mut Agent,
+    o: Object,
+    fallback: OffsetOption,
+) -> JsResult<OffsetOption> {
+    let allowed = ["prefer", "use", "ignore", "reject"];
+    Ok(get_string_option(agent, o, "offset", &allowed)?
+        .and_then(|s| OffsetOption::from_name(&s))
+        .unwrap_or(fallback))
+}
+
+/// GetTemporalShowOffsetOption(options): whether to show the offset.
+pub(crate) fn show_offset_option(agent: &mut Agent, o: Object) -> JsResult<bool> {
+    let v = get_string_option(agent, o, "offset", &["auto", "never"])?;
+    Ok(v.as_deref() != Some("never"))
+}
+
+/// The `timeZoneName` option of ZonedDateTime strings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShowTimeZone {
+    Auto,
+    Never,
+    Critical,
+}
+
+/// GetTemporalShowTimeZoneNameOption(options).
+pub(crate) fn show_time_zone_option(agent: &mut Agent, o: Object) -> JsResult<ShowTimeZone> {
+    let allowed = ["auto", "never", "critical"];
+    Ok(
+        match get_string_option(agent, o, "timeZoneName", &allowed)?.as_deref() {
+            Some("never") => ShowTimeZone::Never,
+            Some("critical") => ShowTimeZone::Critical,
+            _ => ShowTimeZone::Auto,
         },
     )
 }
@@ -444,12 +579,43 @@ pub(crate) fn difference_settings(
     fallback_smallest: Unit,
     smallest_largest_default: Unit,
 ) -> JsResult<DifferenceSettings> {
+    difference_settings_with(
+        agent,
+        since,
+        options,
+        group,
+        &[],
+        fallback_smallest,
+        smallest_largest_default,
+    )
+}
+
+/// GetDifferenceSettings with disallowed units.
+pub(crate) fn difference_settings_with(
+    agent: &mut Agent,
+    since: bool,
+    options: Object,
+    group: UnitGroup,
+    disallowed: &[Unit],
+    fallback_smallest: Unit,
+    smallest_largest_default: Unit,
+) -> JsResult<DifferenceSettings> {
     let largest = unit_option(agent, options, "largestUnit")?;
     let increment = rounding_increment_option(agent, options)?;
     let mode = rounding_mode_option(agent, options, RoundingMode::Trunc)?;
     let smallest = unit_option(agent, options, "smallestUnit")?;
     validate_unit(agent, largest, group, &[UnitValue::Auto])?;
+    if let UnitValue::Unit(u) = largest
+        && disallowed.contains(&u)
+    {
+        return agent.range_error("largestUnit not allowed here");
+    }
     validate_unit(agent, smallest, group, &[])?;
+    if let UnitValue::Unit(u) = smallest
+        && disallowed.contains(&u)
+    {
+        return agent.range_error("smallestUnit not allowed here");
+    }
     let smallest = match smallest {
         UnitValue::Unit(u) => u,
         _ => fallback_smallest,
@@ -503,7 +669,13 @@ pub(crate) fn canonicalize_calendar(agent: &mut Agent, id: &str) -> JsResult<()>
 pub(crate) fn to_calendar_identifier(agent: &mut Agent, v: Value) -> JsResult<()> {
     if matches!(
         slots(agent, v),
-        Some(TemporalSlots::PlainDate(_) | TemporalSlots::PlainDateTime(_))
+        Some(
+            TemporalSlots::PlainDate(_)
+                | TemporalSlots::PlainDateTime(_)
+                | TemporalSlots::PlainYearMonth(_)
+                | TemporalSlots::PlainMonthDay(_)
+                | TemporalSlots::ZonedDateTime(_)
+        )
     ) {
         return Ok(());
     }
@@ -538,40 +710,16 @@ pub(crate) fn parsed_calendar(agent: &mut Agent, parsed: &parse::Parsed) -> JsRe
     }
 }
 
-/// A time zone identifier: an offset (in minutes) or an available named
-/// zone in its case-normalized form.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TimeZoneId {
-    Offset(i64),
-    Named(String),
-}
-
-impl TimeZoneId {
-    /// GetOffsetNanosecondsFor(timeZone, epochNs).
-    pub fn offset_ns(&self, epoch_ns: i128) -> i128 {
-        match self {
-            TimeZoneId::Offset(minutes) => i128::from(*minutes) * 60_000_000_000,
-            TimeZoneId::Named(id) => {
-                let seconds = epoch_ns.div_euclid(1_000_000_000) as i64;
-                crate::tz::zone(id).map_or(0, |z| i128::from(z.offset_at(seconds)) * 1_000_000_000)
-            }
-        }
-    }
-}
-
 /// ToTemporalTimeZoneIdentifier(temporalTimeZoneLike).
 pub(crate) fn to_time_zone_identifier(agent: &mut Agent, v: Value) -> JsResult<TimeZoneId> {
+    if let Some(TemporalSlots::ZonedDateTime(z)) = slots(agent, v) {
+        return Ok(z.tz);
+    }
     let Value::String(s) = v else {
         return agent.type_error("time zone must be a string");
     };
     let text = agent.heap.string_to_rust(s);
-    match tr(agent, parse::parse_time_zone_string(&text))? {
-        TimeZoneString::Offset(minutes) => Ok(TimeZoneId::Offset(minutes)),
-        TimeZoneString::Name(name) => match crate::tz::find_zone(&name) {
-            Some(z) => Ok(TimeZoneId::Named(z.identifier)),
-            None => agent.range_error(&format!("unknown time zone: {name}")),
-        },
-    }
+    tr(agent, TimeZoneId::from_string(&text))
 }
 
 // ----- Property bags -----
@@ -634,8 +782,40 @@ pub(crate) fn prepare_fields(
     if time {
         names.extend(TIME_FIELDS);
     }
+    Ok(prepare_named_fields(agent, item, &names, partial)?.0)
+}
+
+/// The offset and time zone fields of PrepareCalendarFields.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ZoneFields {
+    /// The offset string, in nanoseconds.
+    pub offset: Option<i64>,
+    pub time_zone: Option<TimeZoneId>,
+}
+
+/// ToOffsetString(argument), in nanoseconds.
+fn to_offset_string(agent: &mut Agent, v: Value) -> JsResult<i64> {
+    let p = ops::to_primitive(agent, v, PreferredType::String)?;
+    let Value::String(s) = p else {
+        return agent.type_error("offset must be a string");
+    };
+    let text = agent.heap.string_to_rust(s);
+    tr(agent, parse::parse_offset_string(&text))
+}
+
+/// PrepareCalendarFields over any of the names year, month, monthCode,
+/// day, the time fields, offset and timeZone: reads them in code unit
+/// order and converts each as it goes.
+pub(crate) fn prepare_named_fields(
+    agent: &mut Agent,
+    item: Object,
+    names: &[&str],
+    partial: bool,
+) -> JsResult<(Fields, ZoneFields)> {
+    let mut names: Vec<&str> = names.to_vec();
     names.sort_unstable();
     let mut f = Fields::default();
+    let mut z = ZoneFields::default();
     let mut any = false;
     for name in names {
         let v = get_prop(agent, item, name)?;
@@ -648,6 +828,8 @@ pub(crate) fn prepare_fields(
             "month" => f.month = Some(to_positive_integer_with_truncation(agent, v)?),
             "monthCode" => f.month_code = Some(to_month_code(agent, v)?),
             "day" => f.day = Some(to_positive_integer_with_truncation(agent, v)?),
+            "offset" => z.offset = Some(to_offset_string(agent, v)?),
+            "timeZone" => z.time_zone = Some(to_time_zone_identifier(agent, v)?),
             _ => {
                 let i = TIME_FIELDS
                     .iter()
@@ -660,7 +842,90 @@ pub(crate) fn prepare_fields(
     if partial && !any {
         return agent.type_error("no recognized properties");
     }
-    Ok(f)
+    Ok((f, z))
+}
+
+/// The field names of a date-time with an offset and a time zone.
+pub(crate) const ZONED_FIELDS: [&str; 12] = [
+    "year",
+    "month",
+    "monthCode",
+    "day",
+    "hour",
+    "minute",
+    "second",
+    "millisecond",
+    "microsecond",
+    "nanosecond",
+    "offset",
+    "timeZone",
+];
+
+/// CalendarResolveFields for the month: the month number of `month` and
+/// `monthCode`, which must agree.
+fn resolve_month(agent: &mut Agent, f: &Fields) -> JsResult<f64> {
+    match (f.month, f.month_code) {
+        (None, None) => agent.type_error("month or monthCode is required"),
+        (m, Some((code, leap))) => {
+            if leap || !(1..=12).contains(&code) {
+                return agent.range_error("monthCode not in the ISO 8601 calendar");
+            }
+            if let Some(m) = m
+                && m != code as f64
+            {
+                return agent.range_error("month and monthCode disagree");
+            }
+            Ok(code as f64)
+        }
+        (Some(m), None) => Ok(m),
+    }
+}
+
+/// CalendarYearMonthFromFields for the ISO 8601 calendar: the first day
+/// of the month.
+pub(crate) fn year_month_from_fields(
+    agent: &mut Agent,
+    f: &Fields,
+    overflow: Overflow,
+) -> JsResult<IsoDate> {
+    let Some(year) = f.year else {
+        return agent.type_error("year is required");
+    };
+    let month = resolve_month(agent, f)?;
+    if year.abs() > 1e9 {
+        return agent.range_error("year-month outside the supported range");
+    }
+    let date = tr(
+        agent,
+        IsoDate::regulate(year as i64, to_i64(month), 1, overflow),
+    )?;
+    if !year_month_within_limits(date) {
+        return agent.range_error("year-month outside the supported range");
+    }
+    Ok(date)
+}
+
+/// CalendarMonthDayFromFields for the ISO 8601 calendar: the date in the
+/// reference year 1972 (the year, if given, only regulates the day).
+pub(crate) fn month_day_from_fields(
+    agent: &mut Agent,
+    f: &Fields,
+    overflow: Overflow,
+) -> JsResult<IsoDate> {
+    let Some(day) = f.day else {
+        return agent.type_error("day is required");
+    };
+    let month = resolve_month(agent, f)?;
+    let year = match f.year {
+        Some(y) if y.abs() > 1e9 => return agent.range_error("year outside the supported range"),
+        Some(y) => y as i64,
+        None => 1972,
+    };
+    let date = tr(
+        agent,
+        IsoDate::regulate(year, to_i64(month), to_i64(day), overflow),
+    )?;
+    Ok(IsoDate::new(1972, date.month, date.day))
 }
 
 /// CalendarDateFromFields for the ISO 8601 calendar (CalendarResolveFields
@@ -676,21 +941,7 @@ pub(crate) fn date_from_fields(
     let Some(day) = f.day else {
         return agent.type_error("day is required");
     };
-    let month = match (f.month, f.month_code) {
-        (None, None) => return agent.type_error("month or monthCode is required"),
-        (m, Some((code, leap))) => {
-            if leap || !(1..=12).contains(&code) {
-                return agent.range_error("monthCode not in the ISO 8601 calendar");
-            }
-            if let Some(m) = m
-                && m != code as f64
-            {
-                return agent.range_error("month and monthCode disagree");
-            }
-            code as f64
-        }
-        (Some(m), None) => m,
-    };
+    let month = resolve_month(agent, f)?;
     if year.abs() > 1e9 {
         return agent.range_error("date outside the supported range");
     }
@@ -801,6 +1052,12 @@ pub(crate) fn to_temporal_date(
                 overflow_option(agent, opts)?;
                 return Ok(dt.date);
             }
+            Some(TemporalSlots::ZonedDateTime(z)) => {
+                let dt = z.tz.date_time_for(z.ns);
+                let opts = get_options_object(agent, options)?;
+                overflow_option(agent, opts)?;
+                return Ok(dt.date);
+            }
             _ => {}
         }
         calendar_with_iso_default(agent, o)?;
@@ -838,6 +1095,12 @@ pub(crate) fn to_temporal_date_time(
                 let opts = get_options_object(agent, options)?;
                 overflow_option(agent, opts)?;
                 return Ok(DateTime::new(d, Time::MIDNIGHT));
+            }
+            Some(TemporalSlots::ZonedDateTime(z)) => {
+                let dt = z.tz.date_time_for(z.ns);
+                let opts = get_options_object(agent, options)?;
+                overflow_option(agent, opts)?;
+                return Ok(dt);
             }
             _ => {}
         }
@@ -883,6 +1146,12 @@ pub(crate) fn to_temporal_time(agent: &mut Agent, item: Value, options: Value) -
                 overflow_option(agent, opts)?;
                 return Ok(dt.time);
             }
+            Some(TemporalSlots::ZonedDateTime(z)) => {
+                let dt = z.tz.date_time_for(z.ns);
+                let opts = get_options_object(agent, options)?;
+                overflow_option(agent, opts)?;
+                return Ok(dt.time);
+            }
             _ => {}
         }
         let fields = to_time_record(agent, o, false)?;
@@ -911,8 +1180,10 @@ pub(crate) fn to_time_or_midnight(agent: &mut Agent, item: Value) -> JsResult<Ti
 
 /// ToTemporalInstant(item): epoch nanoseconds.
 pub(crate) fn to_temporal_instant(agent: &mut Agent, item: Value) -> JsResult<i128> {
-    if let Some(TemporalSlots::Instant(ns)) = slots(agent, item) {
-        return Ok(ns);
+    match slots(agent, item) {
+        Some(TemporalSlots::Instant(ns)) => return Ok(ns),
+        Some(TemporalSlots::ZonedDateTime(z)) => return Ok(z.ns),
+        _ => {}
     }
     let p = ops::to_primitive(agent, item, PreferredType::String)?;
     let Value::String(s) = p else {
@@ -996,84 +1267,249 @@ pub(crate) fn to_temporal_duration(agent: &mut Agent, item: Value) -> JsResult<D
     Ok(d)
 }
 
-/// GetTemporalRelativeToOption(options) for plain dates. Relative-to
-/// values with a time zone (ZonedDateTime) are a RangeError until
-/// `Temporal.ZonedDateTime` exists.
-pub(crate) fn relative_to_option(agent: &mut Agent, o: Object) -> JsResult<Option<IsoDate>> {
+/// The result of GetTemporalRelativeToOption.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RelativeTo {
+    Plain(IsoDate),
+    Zoned(ZonedSlots),
+}
+
+/// The offset string of a parsed ISO string: its offset behaviour, the
+/// offset in nanoseconds and whether it matches to the minute only.
+fn parsed_offset(parsed: &parse::Parsed) -> (OffsetBehaviour, i128, bool) {
+    if parsed.z {
+        return (OffsetBehaviour::Exact, 0, true);
+    }
+    match parsed.offset {
+        None => (OffsetBehaviour::Wall, 0, true),
+        Some((ns, seconds)) => (OffsetBehaviour::Option, i128::from(ns), !seconds),
+    }
+}
+
+/// GetTemporalRelativeToOption(options).
+pub(crate) fn relative_to_option(agent: &mut Agent, o: Object) -> JsResult<Option<RelativeTo>> {
     let v = get_prop(agent, o, "relativeTo")?;
     if v.is_undefined() {
         return Ok(None);
     }
-    if let Value::Object(item) = v {
+    let (date, time, tz, behaviour, offset_ns, match_minutes) = if let Value::Object(item) = v {
         match slots(agent, v) {
-            Some(TemporalSlots::PlainDate(d)) => return Ok(Some(d)),
-            Some(TemporalSlots::PlainDateTime(dt)) => return Ok(Some(dt.date)),
+            Some(TemporalSlots::ZonedDateTime(z)) => return Ok(Some(RelativeTo::Zoned(z))),
+            Some(TemporalSlots::PlainDate(d)) => return Ok(Some(RelativeTo::Plain(d))),
+            Some(TemporalSlots::PlainDateTime(dt)) => {
+                return Ok(Some(RelativeTo::Plain(dt.date)));
+            }
             _ => {}
         }
         calendar_with_iso_default(agent, item)?;
-        // The fields of the date-time, then offset and timeZone, in
-        // code unit order.
-        let mut names: Vec<&str> = vec!["year", "month", "monthCode", "day", "offset", "timeZone"];
-        names.extend(TIME_FIELDS);
-        names.sort_unstable();
-        let mut f = Fields::default();
-        let mut time_zone = None;
-        for name in names {
-            let value = get_prop(agent, item, name)?;
-            if value.is_undefined() {
-                continue;
-            }
-            match name {
-                "year" => f.year = Some(to_integer_with_truncation(agent, value)?),
-                "month" => f.month = Some(to_positive_integer_with_truncation(agent, value)?),
-                "monthCode" => f.month_code = Some(to_month_code(agent, value)?),
-                "day" => f.day = Some(to_positive_integer_with_truncation(agent, value)?),
-                "offset" => {
-                    let p = ops::to_primitive(agent, value, PreferredType::String)?;
-                    let Value::String(s) = p else {
-                        return agent.type_error("offset must be a string");
-                    };
-                    let text = agent.heap.string_to_rust(s);
-                    tr(agent, parse::parse_offset_string(&text))?;
-                }
-                "timeZone" => time_zone = Some(to_time_zone_identifier(agent, value)?),
-                _ => {
-                    let i = TIME_FIELDS
-                        .iter()
-                        .position(|n| *n == name)
-                        .expect("a time field");
-                    f.time[i] = Some(to_integer_with_truncation(agent, value)?);
-                }
-            }
-        }
+        let (f, z) = prepare_named_fields(agent, item, &ZONED_FIELDS, false)?;
         let date = date_from_fields(agent, &f, Overflow::Constrain)?;
-        time_from_fields(agent, &f, Overflow::Constrain)?;
-        if time_zone.is_some() {
-            return agent.range_error("relativeTo with a time zone is not supported");
-        }
-        return Ok(Some(date));
-    }
-    let Value::String(s) = v else {
-        return agent.type_error("relativeTo must be a string or an object");
-    };
-    let text = agent.heap.string_to_rust(s);
-    let parsed = match parse::parse_iso_date_time(&text, Kind::DateTime) {
-        Ok(p) => p,
-        Err(_) => tr(agent, parse::parse_iso_date_time(&text, Kind::Zoned))?,
-    };
-    if let Some(annotation) = &parsed.time_zone {
-        let annotation = annotation.clone();
-        let tz = agent.heap.alloc_str(&annotation);
-        to_time_zone_identifier(agent, Value::String(tz))?;
+        let time = time_from_fields(agent, &f, Overflow::Constrain)?;
+        let (behaviour, offset) = match z.offset {
+            Some(ns) => (OffsetBehaviour::Option, i128::from(ns)),
+            None => (OffsetBehaviour::Wall, 0),
+        };
+        (date, Some(time), z.time_zone, behaviour, offset, false)
+    } else {
+        let Value::String(s) = v else {
+            return agent.type_error("relativeTo must be a string or an object");
+        };
+        let text = agent.heap.string_to_rust(s);
+        let parsed = match parse::parse_iso_date_time(&text, Kind::DateTime) {
+            Ok(p) => p,
+            Err(_) => tr(agent, parse::parse_iso_date_time(&text, Kind::Zoned))?,
+        };
+        let tz = match &parsed.time_zone {
+            Some(annotation) => Some(tr(agent, TimeZoneId::from_identifier(annotation))?),
+            None => None,
+        };
         parsed_calendar(agent, &parsed)?;
-        return agent.range_error("relativeTo with a time zone is not supported");
+        let (behaviour, offset, match_minutes) = parsed_offset(&parsed);
+        let date = IsoDate::new(parsed.year.unwrap_or(0), parsed.month, parsed.day);
+        (date, parsed.time, tz, behaviour, offset, match_minutes)
+    };
+    let Some(tz) = tz else {
+        if !date.within_limits() {
+            return agent.range_error("date outside the supported range");
+        }
+        return Ok(Some(RelativeTo::Plain(date)));
+    };
+    let ns = tr(
+        agent,
+        crate::temporal::zone::interpret_iso_date_time_offset(
+            date,
+            time,
+            behaviour,
+            offset_ns,
+            &tz,
+            Disambiguation::Compatible,
+            OffsetOption::Reject,
+            match_minutes,
+        ),
+    )?;
+    if !crate::temporal::is_valid_epoch_ns(ns) {
+        return agent.range_error("instant outside the supported range");
     }
+    Ok(Some(RelativeTo::Zoned(ZonedSlots { ns, tz })))
+}
+
+/// ToTemporalZonedDateTime(item, options).
+pub(crate) fn to_temporal_zoned_date_time(
+    agent: &mut Agent,
+    item: Value,
+    options: Value,
+) -> JsResult<ZonedSlots> {
+    let (date, time, tz, behaviour, offset_ns, match_minutes, disambiguation, offset) =
+        if let Value::Object(o) = item {
+            if let Some(TemporalSlots::ZonedDateTime(z)) = slots(agent, item) {
+                let opts = get_options_object(agent, options)?;
+                disambiguation_option(agent, opts)?;
+                offset_option(agent, opts, OffsetOption::Reject)?;
+                overflow_option(agent, opts)?;
+                return Ok(z);
+            }
+            calendar_with_iso_default(agent, o)?;
+            let (f, z) = prepare_named_fields(agent, o, &ZONED_FIELDS, false)?;
+            let Some(tz) = z.time_zone else {
+                return agent.type_error("timeZone is required");
+            };
+            let (behaviour, offset_ns) = match z.offset {
+                Some(ns) => (OffsetBehaviour::Option, i128::from(ns)),
+                None => (OffsetBehaviour::Wall, 0),
+            };
+            let opts = get_options_object(agent, options)?;
+            let disambiguation = disambiguation_option(agent, opts)?;
+            let offset = offset_option(agent, opts, OffsetOption::Reject)?;
+            let overflow = overflow_option(agent, opts)?;
+            let date = date_from_fields(agent, &f, overflow)?;
+            let time = time_from_fields(agent, &f, overflow)?;
+            (
+                date,
+                Some(time),
+                tz,
+                behaviour,
+                offset_ns,
+                false,
+                disambiguation,
+                offset,
+            )
+        } else {
+            let text = string_arg(agent, item)?;
+            let parsed = tr(agent, parse::parse_iso_date_time(&text, Kind::Zoned))?;
+            let annotation = parsed.time_zone.clone().unwrap_or_default();
+            let tz = tr(agent, TimeZoneId::from_identifier(&annotation))?;
+            parsed_calendar(agent, &parsed)?;
+            let (behaviour, offset_ns, match_minutes) = parsed_offset(&parsed);
+            let opts = get_options_object(agent, options)?;
+            let disambiguation = disambiguation_option(agent, opts)?;
+            let offset = offset_option(agent, opts, OffsetOption::Reject)?;
+            overflow_option(agent, opts)?;
+            let date = IsoDate::new(parsed.year.unwrap_or(0), parsed.month, parsed.day);
+            (
+                date,
+                parsed.time,
+                tz,
+                behaviour,
+                offset_ns,
+                match_minutes,
+                disambiguation,
+                offset,
+            )
+        };
+    let ns = tr(
+        agent,
+        crate::temporal::zone::interpret_iso_date_time_offset(
+            date,
+            time,
+            behaviour,
+            offset_ns,
+            &tz,
+            disambiguation,
+            offset,
+            match_minutes,
+        ),
+    )?;
+    if !crate::temporal::is_valid_epoch_ns(ns) {
+        return agent.range_error("instant outside the supported range");
+    }
+    Ok(ZonedSlots { ns, tz })
+}
+
+/// The field names of a year-month and of a month-day.
+pub(crate) const YEAR_MONTH_FIELDS: [&str; 3] = ["year", "month", "monthCode"];
+pub(crate) const MONTH_DAY_FIELDS: [&str; 4] = ["year", "month", "monthCode", "day"];
+
+/// ToTemporalYearMonth(item, options).
+pub(crate) fn to_temporal_year_month(
+    agent: &mut Agent,
+    item: Value,
+    options: Value,
+) -> JsResult<IsoDate> {
+    if let Value::Object(o) = item {
+        if let Some(TemporalSlots::PlainYearMonth(d)) = slots(agent, item) {
+            let opts = get_options_object(agent, options)?;
+            overflow_option(agent, opts)?;
+            return Ok(d);
+        }
+        calendar_with_iso_default(agent, o)?;
+        let (fields, _) = prepare_named_fields(agent, o, &YEAR_MONTH_FIELDS, false)?;
+        let opts = get_options_object(agent, options)?;
+        let overflow = overflow_option(agent, opts)?;
+        return year_month_from_fields(agent, &fields, overflow);
+    }
+    let text = string_arg(agent, item)?;
+    let parsed = tr(agent, parse::parse_iso_date_time(&text, Kind::YearMonth))?;
     parsed_calendar(agent, &parsed)?;
-    let date = IsoDate::new(parsed.year.unwrap_or(0), parsed.month, parsed.day);
-    if !date.within_limits() {
-        return agent.range_error("date outside the supported range");
+    let opts = get_options_object(agent, options)?;
+    overflow_option(agent, opts)?;
+    let date = IsoDate::new(parsed.year.unwrap_or(0), parsed.month, 1);
+    if !year_month_within_limits(date) {
+        return agent.range_error("year-month outside the supported range");
     }
-    Ok(Some(date))
+    Ok(date)
+}
+
+/// ToTemporalMonthDay(item, options).
+pub(crate) fn to_temporal_month_day(
+    agent: &mut Agent,
+    item: Value,
+    options: Value,
+) -> JsResult<IsoDate> {
+    if let Value::Object(o) = item {
+        if let Some(TemporalSlots::PlainMonthDay(d)) = slots(agent, item) {
+            let opts = get_options_object(agent, options)?;
+            overflow_option(agent, opts)?;
+            return Ok(d);
+        }
+        calendar_with_iso_default(agent, o)?;
+        let (fields, _) = prepare_named_fields(agent, o, &MONTH_DAY_FIELDS, false)?;
+        let opts = get_options_object(agent, options)?;
+        let overflow = overflow_option(agent, opts)?;
+        return month_day_from_fields(agent, &fields, overflow);
+    }
+    let text = string_arg(agent, item)?;
+    let parsed = tr(agent, parse::parse_iso_date_time(&text, Kind::MonthDay))?;
+    parsed_calendar(agent, &parsed)?;
+    let opts = get_options_object(agent, options)?;
+    overflow_option(agent, opts)?;
+    Ok(IsoDate::new(1972, parsed.month, parsed.day))
+}
+
+/// ISODateToFields(calendar, isoDate, year-month): the year and month.
+pub(crate) fn year_month_fields(date: IsoDate) -> Fields {
+    Fields {
+        day: None,
+        ..fields_of(date, None)
+    }
+}
+
+/// ISODateToFields(calendar, isoDate, month-day): the month code and day.
+pub(crate) fn month_day_fields(date: IsoDate) -> Fields {
+    Fields {
+        year: None,
+        month: None,
+        ..fields_of(date, None)
+    }
 }
 
 // ----- Shared methods -----

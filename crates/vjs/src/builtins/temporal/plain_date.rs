@@ -2,11 +2,12 @@
 
 use super::{
     DATE_GETTERS, TemporalSlots, UnitGroup, canonicalize_calendar, create_date, create_date_time,
-    create_duration, date_from_fields, date_getter, difference_settings, fields_of,
-    get_options_object, getter_index, indexed_getter, merge_fields, overflow_option,
-    prepare_fields, require_partial_temporal_object, show_calendar_option, slots,
-    to_calendar_identifier, to_i64, to_integer_with_truncation, to_temporal_date,
-    to_temporal_duration, to_time_or_midnight, tr, value_of,
+    create_duration, create_month_day, create_year_month, create_zoned, date_from_fields,
+    date_getter, difference_settings, fields_of, get_options_object, get_prop, getter_index,
+    indexed_getter, merge_fields, month_day_from_fields, overflow_option, prepare_fields,
+    require_partial_temporal_object, show_calendar_option, slots, to_calendar_identifier, to_i64,
+    to_integer_with_truncation, to_temporal_date, to_temporal_duration, to_temporal_time,
+    to_time_or_midnight, to_time_zone_identifier, tr, value_of, year_month_from_fields,
 };
 use crate::agent::Agent;
 use crate::builtins::{
@@ -16,10 +17,11 @@ use crate::completion::JsResult;
 use crate::function::NativeCall;
 use crate::gc::{Object, Realm};
 use crate::realm::Intrinsic;
+use crate::temporal::zone::Disambiguation;
 use crate::temporal::{
-    DateTime, InternalDuration, IsoDate, Time, Unit, calendar_date_add, calendar_date_until,
-    duration_from_internal, format_calendar_annotation, format_date, iso_days_in_month,
-    round_relative_duration,
+    DateTime, InternalDuration, IsoDate, Overflow, Time, Unit, calendar_date_add,
+    calendar_date_until, duration_from_internal, format_calendar_annotation, format_date,
+    iso_days_in_month, round_relative_duration,
 };
 use crate::value::Value;
 
@@ -58,7 +60,31 @@ pub(crate) fn install(agent: &mut Agent, realm: Realm, temporal: Object) {
         to_plain_date_time,
         0,
     );
+    method(
+        agent,
+        realm,
+        proto,
+        "toPlainMonthDay",
+        to_plain_month_day,
+        0,
+    );
+    method(
+        agent,
+        realm,
+        proto,
+        "toPlainYearMonth",
+        to_plain_year_month,
+        0,
+    );
     method(agent, realm, proto, "toString", to_string, 0);
+    method(
+        agent,
+        realm,
+        proto,
+        "toZonedDateTime",
+        to_zoned_date_time,
+        1,
+    );
     method(agent, realm, proto, "until", until, 1);
     method(agent, realm, proto, "valueOf", value_of, 0);
     method(agent, realm, proto, "with", with, 1);
@@ -191,8 +217,10 @@ fn difference(agent: &mut Agent, call: &NativeCall<'_>, since: bool) -> JsResult
             agent,
             round_relative_duration(
                 internal,
+                origin.utc_epoch_ns(),
                 dest,
                 origin,
+                None,
                 s.largest,
                 s.increment,
                 s.smallest,
@@ -225,6 +253,47 @@ fn to_plain_date_time(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value
     let date = this_date(agent, call.this)?;
     let time = to_time_or_midnight(agent, call.arg(0))?;
     create_date_time(agent, DateTime::new(date, time), None)
+}
+
+fn to_plain_year_month(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let date = this_date(agent, call.this)?;
+    let result = year_month_from_fields(agent, &fields_of(date, None), Overflow::Constrain)?;
+    create_year_month(agent, result, None)
+}
+
+fn to_plain_month_day(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let date = this_date(agent, call.this)?;
+    let result = month_day_from_fields(agent, &fields_of(date, None), Overflow::Constrain)?;
+    create_month_day(agent, result, None)
+}
+
+/// `toZonedDateTime(item)`: a time zone, or `{ timeZone, plainTime }`.
+fn to_zoned_date_time(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let date = this_date(agent, call.this)?;
+    let item = call.arg(0);
+    let (tz, time_like) = match item {
+        Value::Object(o) => {
+            let like = get_prop(agent, o, "timeZone")?;
+            if like.is_undefined() {
+                (to_time_zone_identifier(agent, item)?, Value::Undefined)
+            } else {
+                let tz = to_time_zone_identifier(agent, like)?;
+                (tz, get_prop(agent, o, "plainTime")?)
+            }
+        }
+        _ => (to_time_zone_identifier(agent, item)?, Value::Undefined),
+    };
+    let ns = if time_like.is_undefined() {
+        tr(agent, tz.start_of_day(date))?
+    } else {
+        let time = to_temporal_time(agent, time_like, Value::Undefined)?;
+        let dt = DateTime::new(date, time);
+        if !dt.within_limits() {
+            return agent.range_error("date-time outside the supported range");
+        }
+        tr(agent, tz.epoch_ns_for(dt, Disambiguation::Compatible))?
+    };
+    create_zoned(agent, ns, tz, None)
 }
 
 fn to_string(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {

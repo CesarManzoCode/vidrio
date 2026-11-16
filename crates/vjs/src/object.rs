@@ -558,8 +558,9 @@ pub enum ObjectKind {
     RawJson,
     /// A Date object: `[[DateValue]]` (a time value or NaN).
     Date(f64),
-    /// A Temporal object (Duration, Instant, PlainDate, PlainTime or
-    /// PlainDateTime) and its internal slots.
+    /// A Temporal object (Duration, Instant, PlainDate, PlainTime,
+    /// PlainDateTime, PlainYearMonth, PlainMonthDay or ZonedDateTime) and
+    /// its internal slots.
     Temporal(Box<crate::builtins::temporal::TemporalSlots>),
 }
 

@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use super::{
-    TemporalSlots, UnitGroup, UnitValue, create_duration, fractional_digits_option,
+    RelativeTo, TemporalSlots, UnitGroup, UnitValue, create_duration, fractional_digits_option,
     get_options_object, getter_index, indexed_getter, number, relative_to_option, round_to_options,
     rounding_increment_option, rounding_mode_option, slots, to_integer_if_integral,
     to_partial_duration, to_temporal_duration, tr, unit_option, validate_increment, validate_unit,
@@ -17,6 +17,10 @@ use crate::completion::JsResult;
 use crate::function::NativeCall;
 use crate::gc::{Object, Realm};
 use crate::realm::Intrinsic;
+use crate::temporal::zone::{
+    add_zoned_date_time, difference_zoned_date_time_with_rounding,
+    difference_zoned_date_time_with_total,
+};
 use crate::temporal::{
     DURATION_FIELDS, DateDuration, DateTime, Duration, InternalDuration, NS_PER_DAY, Overflow,
     Precision, RoundingMode, Time, Unit, add_24h_days, calendar_date_add, check_time_duration,
@@ -101,8 +105,25 @@ fn compare(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     }
     let (lu1, lu2) = (one.default_largest_unit(), two.default_largest_unit());
     let (d1, d2) = (one.to_internal(), two.to_internal());
+    if let Some(RelativeTo::Zoned(z)) = &relative
+        && (lu1.is_date() || lu2.is_date())
+    {
+        let after1 = tr(
+            agent,
+            add_zoned_date_time(z.ns, &z.tz, d1, Overflow::Constrain),
+        )?;
+        let after2 = tr(
+            agent,
+            add_zoned_date_time(z.ns, &z.tz, d2, Overflow::Constrain),
+        )?;
+        return Ok(Value::Number(match after1.cmp(&after2) {
+            Ordering::Less => -1.0,
+            Ordering::Equal => 0.0,
+            Ordering::Greater => 1.0,
+        }));
+    }
     let (days1, days2) = if lu1.is_calendar() || lu2.is_calendar() {
-        let Some(rel) = relative else {
+        let Some(RelativeTo::Plain(rel)) = relative else {
             return agent.range_error("comparing calendar units requires relativeTo");
         };
         let a = tr(agent, date_duration_days(d1.date, rel))?;
@@ -241,7 +262,26 @@ fn round(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     if increment > 1 && largest != smallest && smallest.is_date() {
         return agent.range_error("roundingIncrement must be 1 when rounding to a date unit");
     }
-    if let Some(rel) = relative {
+    if let Some(RelativeTo::Zoned(z)) = &relative {
+        let internal = d.to_internal();
+        let target = tr(
+            agent,
+            add_zoned_date_time(z.ns, &z.tz, internal, Overflow::Constrain),
+        )?;
+        let internal = tr(
+            agent,
+            difference_zoned_date_time_with_rounding(
+                z.ns, target, &z.tz, largest, increment, smallest, mode,
+            ),
+        )?;
+        let balance = if largest.is_date() {
+            Unit::Hour
+        } else {
+            largest
+        };
+        return create_duration(agent, duration_from_internal(internal, balance), None);
+    }
+    if let Some(RelativeTo::Plain(rel)) = relative {
         let (start, target) = relative_target(agent, &d, rel)?;
         let internal = tr(
             agent,
@@ -301,7 +341,17 @@ fn total(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     let UnitValue::Unit(unit) = unit else {
         return agent.range_error("unit is required");
     };
-    let total = if let Some(rel) = relative {
+    let total = if let Some(RelativeTo::Zoned(z)) = &relative {
+        let internal = d.to_internal();
+        let target = tr(
+            agent,
+            add_zoned_date_time(z.ns, &z.tz, internal, Overflow::Constrain),
+        )?;
+        tr(
+            agent,
+            difference_zoned_date_time_with_total(z.ns, target, &z.tz, unit),
+        )?
+    } else if let Some(RelativeTo::Plain(rel)) = relative {
         let (start, target) = relative_target(agent, &d, rel)?;
         tr(
             agent,

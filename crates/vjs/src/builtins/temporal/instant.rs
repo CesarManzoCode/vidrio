@@ -2,10 +2,11 @@
 
 use super::{
     TemporalSlots, UnitGroup, UnitValue, bigint_from_i128, create_duration, create_instant,
-    difference_settings, fractional_digits_option, get_options_object, get_prop, getter_index,
-    i128_from_bigint, indexed_getter, number, round_to_options, rounding_increment_option,
-    rounding_mode_option, slots, to_temporal_duration, to_temporal_instant,
-    to_time_zone_identifier, tr, unit_option, validate_increment, validate_unit, value_of,
+    create_zoned, difference_settings, fractional_digits_option, get_options_object, get_prop,
+    getter_index, i128_from_bigint, indexed_getter, number, round_to_options,
+    rounding_increment_option, rounding_mode_option, slots, to_temporal_duration,
+    to_temporal_instant, to_time_zone_identifier, tr, unit_option, validate_increment,
+    validate_unit, value_of,
 };
 use crate::agent::Agent;
 use crate::builtins::{
@@ -59,6 +60,14 @@ pub(crate) fn install(agent: &mut Agent, realm: Realm, temporal: Object) {
     method(agent, realm, proto, "toJSON", to_json, 0);
     method(agent, realm, proto, "toLocaleString", to_json, 0);
     method(agent, realm, proto, "toString", to_string, 0);
+    method(
+        agent,
+        realm,
+        proto,
+        "toZonedDateTimeISO",
+        to_zoned_date_time_iso,
+        1,
+    );
     method(agent, realm, proto, "until", until, 1);
     method(agent, realm, proto, "valueOf", value_of, 0);
     to_string_tag(agent, proto, "Temporal.Instant");
@@ -256,6 +265,13 @@ fn to_string(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     }
     let s = instant_string(rounded, tz.as_ref(), precision.precision);
     Ok(str_value(agent, &s))
+}
+
+/// `toZonedDateTimeISO(timeZone)`.
+fn to_zoned_date_time_iso(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let ns = this_instant(agent, call.this)?;
+    let tz = to_time_zone_identifier(agent, call.arg(0))?;
+    create_zoned(agent, ns, tz, None)
 }
 
 fn to_json(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {

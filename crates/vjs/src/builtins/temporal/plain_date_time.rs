@@ -1,17 +1,16 @@
-//! `Temporal.PlainDateTime` (Temporal proposal §5). `toZonedDateTime`
-//! needs `Temporal.ZonedDateTime` and is not installed yet.
+//! `Temporal.PlainDateTime` (Temporal proposal §5).
 
 use super::plain_date::{calendar_argument, date_arguments};
 use super::plain_time::{TIME_GETTERS, time_arguments};
 use super::{
     DATE_GETTERS, TemporalSlots, UnitGroup, UnitValue, create_date, create_date_time,
-    create_duration, create_time, date_from_fields, date_getter, difference_settings, fields_of,
-    fractional_digits_option, get_options_object, getter_index, indexed_getter, merge_fields,
-    number, overflow_option, prepare_fields, require_partial_temporal_object, round_to_options,
-    rounding_increment_option, rounding_mode_option, show_calendar_option, slots, time_from_fields,
-    to_calendar_identifier, to_integer_with_truncation, to_temporal_date_time,
-    to_temporal_duration, to_time_or_midnight, tr, unit_option, validate_increment, validate_unit,
-    value_of,
+    create_duration, create_time, create_zoned, date_from_fields, date_getter, difference_settings,
+    disambiguation_option, fields_of, fractional_digits_option, get_options_object, getter_index,
+    indexed_getter, merge_fields, number, overflow_option, prepare_fields,
+    require_partial_temporal_object, round_to_options, rounding_increment_option,
+    rounding_mode_option, show_calendar_option, slots, time_from_fields, to_calendar_identifier,
+    to_integer_with_truncation, to_temporal_date_time, to_temporal_duration, to_time_or_midnight,
+    to_time_zone_identifier, tr, unit_option, validate_increment, validate_unit, value_of,
 };
 use crate::agent::Agent;
 use crate::builtins::{
@@ -64,6 +63,14 @@ pub(crate) fn install(agent: &mut Agent, realm: Realm, temporal: Object) {
     method(agent, realm, proto, "toPlainDate", to_plain_date, 0);
     method(agent, realm, proto, "toPlainTime", to_plain_time, 0);
     method(agent, realm, proto, "toString", to_string, 0);
+    method(
+        agent,
+        realm,
+        proto,
+        "toZonedDateTime",
+        to_zoned_date_time,
+        1,
+    );
     method(agent, realm, proto, "until", until, 1);
     method(agent, realm, proto, "valueOf", value_of, 0);
     method(agent, realm, proto, "with", with, 1);
@@ -258,6 +265,16 @@ fn to_plain_date(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
 fn to_plain_time(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     let dt = this_date_time(agent, call.this)?;
     create_time(agent, dt.time, None)
+}
+
+/// `toZonedDateTime(temporalTimeZoneLike [, options])`.
+fn to_zoned_date_time(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
+    let dt = this_date_time(agent, call.this)?;
+    let tz = to_time_zone_identifier(agent, call.arg(0))?;
+    let options = get_options_object(agent, call.arg(1))?;
+    let disambiguation = disambiguation_option(agent, options)?;
+    let ns = tr(agent, tz.epoch_ns_for(dt, disambiguation))?;
+    create_zoned(agent, ns, tz, None)
 }
 
 fn to_string(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {

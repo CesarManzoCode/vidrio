@@ -1,14 +1,16 @@
 //! The engine-independent part of Temporal (the ISO 8601 calendar only):
 //! ISO date arithmetic, time records, units and rounding modes, duration
 //! records and their balancing, difference and rounding relative to a
-//! date (Temporal proposal §7–§13), and the string forms of every type.
-//! `parse` reads ISO 8601 / RFC 9557 strings. The JavaScript objects are
-//! in `builtins::temporal`.
+//! date or a zoned date-time (Temporal proposal §7–§13), and the string
+//! forms of every type. `parse` reads ISO 8601 / RFC 9557 strings and
+//! `zone` holds the time zone operations. The JavaScript objects are in
+//! `builtins::temporal`.
 //!
 //! Epoch nanoseconds and time durations are `i128`; date fields are
 //! `i64`, always validated before they could overflow.
 
 pub mod parse;
+pub mod zone;
 
 use std::cmp::Ordering;
 
@@ -1064,13 +1066,24 @@ struct Nudge {
     did_expand: bool,
 }
 
+/// The epoch nanoseconds of a date-time: UTC without a time zone, else
+/// GetEpochNanosecondsFor(timeZone, isoDateTime, compatible).
+fn epoch_ns_in(dt: DateTime, tz: Option<&zone::TimeZone>) -> TResult<i128> {
+    match tz {
+        None => Ok(dt.utc_epoch_ns()),
+        Some(z) => z.epoch_ns_for(dt, zone::Disambiguation::Compatible),
+    }
+}
+
 /// NudgeToCalendarUnit: the nudge record and the total.
 #[allow(clippy::too_many_arguments)]
 fn nudge_to_calendar_unit(
     sign: i64,
     duration: InternalDuration,
+    origin_epoch_ns: i128,
     dest_epoch_ns: i128,
     origin: DateTime,
+    tz: Option<&zone::TimeZone>,
     increment: i64,
     unit: Unit,
     mode: RoundingMode,
@@ -1130,12 +1143,27 @@ fn nudge_to_calendar_unit(
             (days, r2, s, e)
         }
     };
+    let _ = r2;
     start.validate()?;
     end.validate()?;
     let start_date = calendar_date_add(origin.date, start, Overflow::Constrain)?;
     let end_date = calendar_date_add(origin.date, end, Overflow::Constrain)?;
-    let start_ns = DateTime::new(start_date, origin.time).utc_epoch_ns();
-    let end_ns = DateTime::new(end_date, origin.time).utc_epoch_ns();
+    // The start of a zero duration is the origin itself, also when its
+    // wall-clock time is ambiguous in the time zone.
+    let start_ns = if start.sign() == 0 {
+        origin_epoch_ns
+    } else {
+        epoch_ns_in(DateTime::new(start_date, origin.time), tz)?
+    };
+    let end_ns = epoch_ns_in(DateTime::new(end_date, origin.time), tz)?;
+    let inside = if sign > 0 {
+        start_ns <= dest_epoch_ns && dest_epoch_ns <= end_ns
+    } else {
+        end_ns <= dest_epoch_ns && dest_epoch_ns <= start_ns
+    };
+    if !inside {
+        return range("the rounding interval does not contain the destination");
+    }
     if end_ns == start_ns {
         return range("rounding over an empty interval");
     }
@@ -1172,6 +1200,52 @@ fn nudge_to_calendar_unit(
         }
     };
     Ok((nudge, total))
+}
+
+/// NudgeToZonedTime: rounds the time part within the day the date part
+/// reaches, whose length the time zone decides.
+fn nudge_to_zoned_time(
+    sign: i64,
+    duration: InternalDuration,
+    origin: DateTime,
+    tz: &zone::TimeZone,
+    increment: i64,
+    unit: Unit,
+    mode: RoundingMode,
+) -> TResult<Nudge> {
+    let start = calendar_date_add(origin.date, duration.date, Overflow::Constrain)?;
+    let end = IsoDate::balance(start.year, start.month, start.day + sign);
+    let start_ns = tz.epoch_ns_for(
+        DateTime::new(start, origin.time),
+        zone::Disambiguation::Compatible,
+    )?;
+    let end_ns = tz.epoch_ns_for(
+        DateTime::new(end, origin.time),
+        zone::Disambiguation::Compatible,
+    )?;
+    let day_span = end_ns - start_ns;
+    let step = unit.nanoseconds() * i128::from(increment);
+    let mut rounded = check_time_duration(round_to_increment(duration.time, step, mode))?;
+    let beyond = rounded - day_span;
+    let (did_expand, day_delta, nudged_epoch_ns) = if beyond.signum() as i64 != -sign {
+        rounded = check_time_duration(round_to_increment(beyond, step, mode))?;
+        (true, sign, end_ns + rounded)
+    } else {
+        (false, 0, start_ns + rounded)
+    };
+    let date = DateDuration {
+        days: duration.date.days + day_delta,
+        ..duration.date
+    };
+    date.validate()?;
+    Ok(Nudge {
+        duration: InternalDuration {
+            date,
+            time: rounded,
+        },
+        nudged_epoch_ns,
+        did_expand,
+    })
 }
 
 /// NudgeToDayOrTime.
@@ -1224,6 +1298,7 @@ fn bubble_relative_duration(
     mut duration: InternalDuration,
     nudged_epoch_ns: i128,
     origin: DateTime,
+    tz: Option<&zone::TimeZone>,
     largest: Unit,
     smallest: Unit,
 ) -> TResult<InternalDuration> {
@@ -1256,7 +1331,7 @@ fn bubble_relative_duration(
         };
         end.validate()?;
         let end_date = calendar_date_add(origin.date, end, Overflow::Constrain)?;
-        let end_ns = DateTime::new(end_date, origin.time).utc_epoch_ns();
+        let end_ns = epoch_ns_in(DateTime::new(end_date, origin.time), tz)?;
         let beyond = (nudged_epoch_ns - end_ns).signum() as i64;
         if beyond != -sign {
             duration = InternalDuration { date: end, time: 0 };
@@ -1267,39 +1342,84 @@ fn bubble_relative_duration(
     Ok(duration)
 }
 
-/// RoundRelativeDuration without a time zone.
+/// RoundRelativeDuration(duration, originEpochNs, destEpochNs,
+/// isoDateTime, timeZone, calendar, largestUnit, increment, smallestUnit,
+/// roundingMode).
 #[allow(clippy::too_many_arguments)]
 pub fn round_relative_duration(
     duration: InternalDuration,
+    origin_epoch_ns: i128,
     dest_epoch_ns: i128,
     origin: DateTime,
+    tz: Option<&zone::TimeZone>,
     largest: Unit,
     increment: i64,
     smallest: Unit,
     mode: RoundingMode,
 ) -> TResult<InternalDuration> {
+    let irregular = smallest.is_calendar() || (tz.is_some() && smallest == Unit::Day);
     let sign = if duration.sign() < 0 { -1 } else { 1 };
-    let nudge = if smallest.is_calendar() {
+    let nudge = if irregular {
         nudge_to_calendar_unit(
             sign,
             duration,
+            origin_epoch_ns,
             dest_epoch_ns,
             origin,
+            tz,
             increment,
             smallest,
             mode,
         )?
         .0
+    } else if let Some(z) = tz {
+        nudge_to_zoned_time(sign, duration, origin, z, increment, smallest, mode)?
     } else {
         nudge_to_day_or_time(duration, dest_epoch_ns, largest, increment, smallest, mode)?
     };
     let mut result = nudge.duration;
     if nudge.did_expand && smallest != Unit::Week {
         let start = smallest.larger(Unit::Day);
-        result =
-            bubble_relative_duration(sign, result, nudge.nudged_epoch_ns, origin, largest, start)?;
+        result = bubble_relative_duration(
+            sign,
+            result,
+            nudge.nudged_epoch_ns,
+            origin,
+            tz,
+            largest,
+            start,
+        )?;
     }
     Ok(result)
+}
+
+/// TotalRelativeDuration(duration, originEpochNs, destEpochNs,
+/// isoDateTime, timeZone, calendar, unit).
+pub fn total_relative_duration(
+    duration: InternalDuration,
+    origin_epoch_ns: i128,
+    dest_epoch_ns: i128,
+    origin: DateTime,
+    tz: Option<&zone::TimeZone>,
+    unit: Unit,
+) -> TResult<f64> {
+    if unit.is_calendar() || (tz.is_some() && unit == Unit::Day) {
+        let sign = if duration.sign() < 0 { -1 } else { 1 };
+        let (_, total) = nudge_to_calendar_unit(
+            sign,
+            duration,
+            origin_epoch_ns,
+            dest_epoch_ns,
+            origin,
+            tz,
+            1,
+            unit,
+            RoundingMode::Trunc,
+        )?;
+        return Ok(total);
+    }
+    let time = add_24h_days(duration.time, duration.date.days)?;
+    Ok(total_time_duration(time, unit))
 }
 
 /// DifferencePlainDateTimeWithRounding.
@@ -1323,8 +1443,10 @@ pub fn difference_plain_date_time_with_rounding(
     }
     round_relative_duration(
         diff,
+        one.utc_epoch_ns(),
         two.utc_epoch_ns(),
         one,
+        None,
         largest,
         increment,
         smallest,
@@ -1348,21 +1470,14 @@ pub fn difference_plain_date_time_with_total(
     if unit == Unit::Nanosecond {
         return Ok(diff.time as f64);
     }
-    if unit.is_calendar() {
-        let sign = if diff.sign() < 0 { -1 } else { 1 };
-        let (_, total) = nudge_to_calendar_unit(
-            sign,
-            diff,
-            two.utc_epoch_ns(),
-            one,
-            1,
-            unit,
-            RoundingMode::Trunc,
-        )?;
-        return Ok(total);
-    }
-    let time = add_24h_days(diff.time, diff.date.days)?;
-    Ok(total_time_duration(time, unit))
+    total_relative_duration(
+        diff,
+        one.utc_epoch_ns(),
+        two.utc_epoch_ns(),
+        one,
+        None,
+        unit,
+    )
 }
 
 /// DateDurationDays(dateDuration, plainRelativeTo).
