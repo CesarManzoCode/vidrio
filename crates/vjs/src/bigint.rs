@@ -246,6 +246,36 @@ impl BigInt {
         BigInt::from_parts(false, vec![n as u32, (n >> 32) as u32])
     }
 
+    pub fn one() -> BigInt {
+        BigInt::from_parts(false, vec![1])
+    }
+
+    /// `10^n`.
+    pub fn pow10(n: u32) -> BigInt {
+        let mut mag = vec![1u32];
+        let mut left = n;
+        while left > 0 {
+            let step = left.min(9);
+            mag_mul_small_add(&mut mag, 10u32.pow(step), 0);
+            left -= step;
+        }
+        BigInt::from_parts(false, mag)
+    }
+
+    /// `self * m + add` for a non-negative `self`.
+    pub fn mul_small_add(&self, m: u32, add: u32) -> BigInt {
+        debug_assert!(!self.negative);
+        let mut mag = self.mag.clone();
+        mag_mul_small_add(&mut mag, m, add);
+        BigInt::from_parts(false, mag)
+    }
+
+    /// Bit `i` of the magnitude.
+    pub fn bit(&self, i: u64) -> bool {
+        let word = (i / 32) as usize;
+        self.mag.get(word).is_some_and(|w| (w >> (i % 32)) & 1 == 1)
+    }
+
     pub fn is_zero(&self) -> bool {
         self.mag.is_empty()
     }
@@ -310,14 +340,15 @@ impl BigInt {
         if self.negative { -magnitude } else { magnitude }
     }
 
-    fn low_u64(&self) -> u64 {
+    /// The lowest 64 bits of the magnitude.
+    pub(crate) fn low_u64(&self) -> u64 {
         let lo = u64::from(*self.mag.first().unwrap_or(&0));
         let hi = u64::from(*self.mag.get(1).unwrap_or(&0));
         lo | (hi << 32)
     }
 
     /// Whether any of the lowest `bits` bits of the magnitude is set.
-    fn has_low_bits(&self, bits: u64) -> bool {
+    pub(crate) fn has_low_bits(&self, bits: u64) -> bool {
         let words = (bits / 32) as usize;
         let rest = (bits % 32) as u32;
         if self.mag.iter().take(words).any(|w| *w != 0) {
@@ -331,7 +362,7 @@ impl BigInt {
     }
 
     /// Magnitude shifted right (sign kept, truncating).
-    fn shr_magnitude(&self, bits: u64) -> BigInt {
+    pub(crate) fn shr_magnitude(&self, bits: u64) -> BigInt {
         let words = (bits / 32) as usize;
         if words >= self.mag.len() {
             return BigInt::zero();

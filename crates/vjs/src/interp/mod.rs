@@ -21,7 +21,7 @@ pub mod function;
 pub mod generator;
 pub mod intrinsics;
 pub mod iter;
-mod operators;
+pub(crate) mod operators;
 pub mod promise;
 
 use std::rc::Rc;

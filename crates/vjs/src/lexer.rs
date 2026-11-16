@@ -550,7 +550,7 @@ impl<'a> Lexer<'a> {
             }
             text.push_str(&exponent);
         }
-        Ok(text.parse::<f64>().unwrap_or(f64::NAN))
+        Ok(crate::numconv::parse_decimal(text.as_bytes()).unwrap_or(f64::NAN))
     }
 
     fn read_string(&mut self, quote: char, tok: &mut Token) -> Result<Utf16, SyntaxError> {
@@ -805,7 +805,7 @@ fn push_code_point(out: &mut Utf16, cp: u32) {
 /// rounding ties to even.
 pub fn radix_to_f64(digits: &str, radix: u32) -> f64 {
     if radix == 10 {
-        return digits.parse().unwrap_or(f64::NAN);
+        return crate::numconv::parse_decimal(digits.as_bytes()).unwrap_or(f64::NAN);
     }
     let bits_per_digit = radix.trailing_zeros();
     let mut bits: Vec<bool> = Vec::with_capacity(digits.len() * bits_per_digit as usize);

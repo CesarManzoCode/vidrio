@@ -117,9 +117,17 @@ pub(crate) fn str_decimal_prefix(units: &[u16]) -> Option<String> {
 fn parse_float(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     let units = trimmed_input(agent, call.arg(0))?;
     let n = match str_decimal_prefix(&units) {
-        // Rust's float parser rounds correctly and accepts the prefix
-        // (`inf` stands for Infinity); "-0" gives -0.
-        Some(text) => text.parse::<f64>().unwrap_or(f64::NAN),
+        // `inf` stands for Infinity; "-0" gives -0.
+        Some(text) => match text.strip_suffix("inf") {
+            Some(sign) => {
+                if sign == "-" {
+                    f64::NEG_INFINITY
+                } else {
+                    f64::INFINITY
+                }
+            }
+            None => crate::numconv::parse_decimal(text.as_bytes()).unwrap_or(f64::NAN),
+        },
         None => f64::NAN,
     };
     Ok(Value::Number(n))
@@ -173,10 +181,7 @@ fn parse_int(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     let digits: Vec<u8> = s[..end].iter().map(|&u| u as u8).collect();
     let magnitude = if radix == 10 {
         // Correctly rounded, as the specification allows for radix 10.
-        std::str::from_utf8(&digits)
-            .ok()
-            .and_then(|t| t.parse::<f64>().ok())
-            .unwrap_or(f64::NAN)
+        crate::numconv::parse_decimal(&digits).unwrap_or(f64::NAN)
     } else {
         BigInt::parse_radix(&digits, radix).map_or(f64::NAN, |b| b.to_f64())
     };

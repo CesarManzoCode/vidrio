@@ -30,3 +30,5 @@ Fuente única de lo que el proyecto no demuestra. Ningún otro archivo los repit
 - En vjs, una referencia a un enlace declarativo que solo se resuelve por nombre (con `with` o `eval` directo no estricto de por medio) se vuelve a resolver al asignar, en vez de fijarse antes de evaluar el lado derecho; solo se nota si el lado derecho borra un `var` creado por `eval`.
 - En vjs, los Script Records y Module Records viven mientras viva el agente: el estado de módulos los enraíza todos, como un mapa de módulos que nunca se vacía.
 - `$262.agent.broadcast` del binario `vjs` espera solo a los agentes que siguen vivos; un agente que termina su script sin llamar a `receiveBroadcast` sale y no recibe mensajes.
+- Los BigInt de vjs tienen un tope de 2^30 bits (`MAX_BIGINT_BITS`): una operación cuyo resultado lo pasaría (`**`, `<<`, `BigInt.asUintN` de un negativo con muchos bits) lanza `RangeError`. La multiplicación y la conversión a cadena son cuadráticas, así que operar cerca del tope es lento.
+- `Math.random` de vjs usa xorshift64* sembrado con el reloj; no es criptográfico.

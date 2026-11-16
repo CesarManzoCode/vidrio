@@ -19,6 +19,7 @@ pub mod json;
 pub mod lexer;
 pub mod module;
 pub mod number;
+pub mod numconv;
 pub mod object;
 pub mod ops;
 pub mod parser;

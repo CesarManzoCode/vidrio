@@ -109,9 +109,9 @@ impl JsonParser<'_> {
             .iter()
             .map(|&u| u as u8 as char)
             .collect();
-        match text.parse::<f64>() {
-            Ok(n) => Ok(Value::Number(n)),
-            Err(_) => self.error("invalid number"),
+        match crate::numconv::parse_decimal(text.as_bytes()) {
+            Some(n) => Ok(Value::Number(n)),
+            None => self.error("invalid number"),
         }
     }
 

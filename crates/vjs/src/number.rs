@@ -1,49 +1,11 @@
-//! Number ↔ string conversions (Number::toString with radix 10 and
-//! StringToNumber, ECMA-262 §6.1.6.1.20 and §7.1.4.1.1), integer
+//! Number ↔ string conversions (Number::toString with radix 10, from
+//! [`crate::numconv`], and StringToNumber, ECMA-262 §6.1.6.1.20 and §7.1.4.1.1), integer
 //! conversions and binary16 rounding.
 
 use crate::bigint::BigInt;
 use crate::unicode::{is_line_terminator, is_whitespace};
 
-/// Number::toString(x, 10).
-pub fn number_to_string(x: f64) -> String {
-    if x.is_nan() {
-        return "NaN".to_string();
-    }
-    if x == 0.0 {
-        return "0".to_string();
-    }
-    if x.is_infinite() {
-        return if x < 0.0 { "-Infinity" } else { "Infinity" }.to_string();
-    }
-    if x < 0.0 {
-        return format!("-{}", number_to_string(-x));
-    }
-    // `{:e}` prints the shortest digits that round-trip: "d.ddde±x".
-    let sci = format!("{x:e}");
-    let (mantissa, exponent) = sci.split_once('e').expect("LowerExp has an exponent");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let e: i32 = exponent.parse().expect("LowerExp exponent is an integer");
-    let k = digits.len() as i32;
-    let n = e + 1;
-    if k <= n && n <= 21 {
-        let mut s = digits;
-        s.extend(std::iter::repeat_n('0', (n - k) as usize));
-        s
-    } else if 0 < n && n <= 21 {
-        format!("{}.{}", &digits[..n as usize], &digits[n as usize..])
-    } else if -6 < n && n <= 0 {
-        format!("0.{}{}", "0".repeat((-n) as usize), digits)
-    } else {
-        let sign = if n - 1 < 0 { '-' } else { '+' };
-        let exp = (n - 1).abs();
-        if k == 1 {
-            format!("{digits}e{sign}{exp}")
-        } else {
-            format!("{}.{}e{sign}{exp}", &digits[..1], &digits[1..])
-        }
-    }
-}
+pub use crate::numconv::number_to_string;
 
 fn is_str_whitespace(u: u16) -> bool {
     match char::from_u32(u32::from(u)) {
@@ -116,60 +78,12 @@ pub fn string_to_number(units: &[u16]) -> f64 {
 }
 
 /// StrUnsignedDecimalLiteral without `Infinity`: digits with an optional
-/// fraction and exponent, no separators.
+/// fraction and exponent, no separators and no sign.
 fn parse_unsigned_decimal(body: &[u8]) -> Option<f64> {
-    let mut i = 0;
-    let int_start = i;
-    while i < body.len() && body[i].is_ascii_digit() {
-        i += 1;
-    }
-    let int_part = &body[int_start..i];
-    let mut frac_part: &[u8] = &[];
-    if i < body.len() && body[i] == b'.' {
-        i += 1;
-        let frac_start = i;
-        while i < body.len() && body[i].is_ascii_digit() {
-            i += 1;
-        }
-        frac_part = &body[frac_start..i];
-    }
-    if int_part.is_empty() && frac_part.is_empty() {
+    if matches!(body.first(), Some(b'+' | b'-')) {
         return None;
     }
-    let mut exp_part: &[u8] = &[];
-    if i < body.len() && (body[i] == b'e' || body[i] == b'E') {
-        let exp_start = i + 1;
-        i += 1;
-        if i < body.len() && (body[i] == b'+' || body[i] == b'-') {
-            i += 1;
-        }
-        let digits_start = i;
-        while i < body.len() && body[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i == digits_start {
-            return None;
-        }
-        exp_part = &body[exp_start..i];
-    }
-    if i != body.len() {
-        return None;
-    }
-    let mut normalized = String::with_capacity(body.len() + 3);
-    if int_part.is_empty() {
-        normalized.push('0');
-    } else {
-        normalized.push_str(std::str::from_utf8(int_part).ok()?);
-    }
-    if !frac_part.is_empty() {
-        normalized.push('.');
-        normalized.push_str(std::str::from_utf8(frac_part).ok()?);
-    }
-    if !exp_part.is_empty() {
-        normalized.push('e');
-        normalized.push_str(std::str::from_utf8(exp_part).ok()?);
-    }
-    normalized.parse::<f64>().ok()
+    crate::numconv::parse_decimal(body)
 }
 
 /// The integer of `x` modulo 2^bits as used by ToInt32 and friends
