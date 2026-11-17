@@ -15,14 +15,26 @@ El contrato técnico está en [`vault/CONTRACT.md`](vault/CONTRACT.md) y las fue
 | --- | --- | --- |
 | K0 | Fundación: contrato, investigación, plan | Cerrada |
 | K1 | Arnés de medición y referencias (Firefox, Chromium, Servo, Boa) | Cerrada |
-| K2 | Motor JavaScript `vjs` medido con test262 | Pendiente |
+| K2 | Motor JavaScript `vjs` medido con test262 | Cerrada |
 | K3 | Red, TLS, documento, DOM, bucle de eventos y WebDriver | Pendiente |
 | K4 | CSS, layout, texto, pintado y ventana | Pendiente |
 | K5 | Conformidad y pisos de éxito | Pendiente |
 
 ## Resultados
 
-Los pisos de éxito son `R(total) ≥ R_servo(total)` en web-platform-tests, ningún directorio del alcance en cero, y `P ≥ P_boa` en test262. vidrio y `vjs` todavía no se miden: `R` y `P` aún no existen.
+Los pisos de éxito son `R(total) ≥ R_servo(total)` en web-platform-tests, ningún directorio del alcance en cero, y `P ≥ P_boa` en test262. vidrio todavía no se mide en web-platform-tests: `R` aún no existe.
+
+Medición de `vjs` en K2, en esta PC, con test262 `9ae074624e2d`, el mismo corredor, las mismas 17 features excluidas y los mismos 92 012 escenarios que Boa (`bench/results/test262/vjs/d191e7f9a909a1be.json` y `bench/results/ratio.json`):
+
+| Área | `vjs` | Boa 0.22.0 |
+| --- | ---: | ---: |
+| `test/language` | 43 738 / 43 802 | 43 437 / 43 802 |
+| `test/built-ins` | 46 698 / 46 885 | 45 861 / 46 885 |
+| `test/annexB` | 1 317 / 1 325 | 1 300 / 1 325 |
+| **Total** | **91 753 / 92 012** | **90 598 / 92 012** |
+| `P` | **0.9972** | **0.9846** |
+
+Ninguna de las 90 áreas de segundo nivel de `test/language` y `test/built-ins` queda con cero escenarios aprobados. El binario `vjs` solo enlaza bibliotecas permitidas.
 
 Medición de referencia de K1, en esta PC, con web-platform-tests `77787fe5fe23` y test262 `9ae074624e2d` (salida de `bench/ratio.py` en `bench/results/ratio.json`):
 
@@ -75,6 +87,7 @@ python3 bench/deps.py forbidden               # comprueba que no hay dependencia
 python3 bench/wptrun.py --product P --all     # corre WPT aislado para P (también --dir D…, --path T…, --run N, --force)
 python3 bench/wptrun.py --net-probe           # comprueba que el aislamiento deja loopback y bloquea la red externa
 python3 bench/test262.py --engine E           # corre test262 con E ∈ {node, boa, vjs} (--control: conjunto de control)
+target/release/vjs [--strict] [--module] [--test262] ARCHIVO…  # ejecuta scripts o módulos con vjs (--test262 instala $262)
 python3 bench/ratio.py                        # calcula R, R_servo, P y P_boa en bench/results/ratio.json
 python3 bench/stability.py --product vidrio --dir D  # compara dos corridas de D contra bench/flaky.json
 ```

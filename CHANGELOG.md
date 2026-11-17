@@ -4,6 +4,27 @@ Cambios y decisiones de vidrio por versión, en términos del producto.
 
 ## [Sin publicar]
 
+### K2 — Motor JavaScript `vjs` medido con test262
+
+#### Añadido
+
+- **Parser:** analizador léxico y sintáctico de ECMAScript con errores tempranos, scripts y módulos.
+- **Motor:** heap con recolector mark-sweep, modelo de objetos, compilador a bytecode e intérprete, módulos y llamadas de cola en funciones estrictas.
+- **Built-ins:** `Object`, `Function`, errores, `Symbol`, `Reflect`, `Proxy`, `Number`, `Math`, `BigInt`, `String` con tablas de Unicode 17.0.0, `RegExp` con motor propio, `Array`, ayudantes de iteradores, colecciones con clave y referencias débiles, `ArrayBuffer`, TypedArrays, `DataView`, `Atomics`, `Promise`, `JSON`, `Date`, Temporal (con lectura de TZif de la PC), `DisposableStack` y `AsyncDisposableStack`, y lo del Anexo B (funciones en bloques, `escape`, `unescape`, métodos HTML de `String` y `getYear` y `setYear` de `Date`).
+- **Shell `vjs`:** ejecuta scripts y módulos (`--strict`, `--module`) y, con `--test262`, instala `$262` con agentes para el corredor de test262.
+
+#### Medido
+
+- **test262:** `vjs` pasa 91 753 de 92 012 escenarios (`P` = 0.9972), contra 90 598 de Boa 0.22.0 (`P_boa` = 0.9846), con el mismo corredor, la misma lista de exclusión y la misma revisión `9ae074624e2d`.
+- **Por área:** `test/language` 43 738 de 43 802, `test/built-ins` 46 698 de 46 885 y `test/annexB` 1 317 de 1 325. Ninguna de las 90 áreas de segundo nivel de `test/language` y `test/built-ins` queda en cero, y ningún escenario falló por tiempo límite.
+- **Dependencias:** el binario `vjs` solo enlaza bibliotecas permitidas.
+
+#### Corregido
+
+- `let`, `const` o `class` en el nivel superior de un `eval` ya no provocan un pánico.
+- Las funciones en bloques del Anexo B.3.2 crean su enlace `var` también en el código global.
+- El redondeo de Temporal con signo negativo redondea el valor con signo, no su magnitud.
+
 ### K1 — Arnés de medición y referencias
 
 #### Añadido
