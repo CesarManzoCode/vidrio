@@ -8,6 +8,7 @@ use crate::transport::{TlsConnector, Transport};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -136,6 +137,13 @@ impl Client {
     /// Enable `https` URLs.
     pub fn set_tls(&mut self, tls: Arc<dyn TlsConnector>) {
         self.tls = Some(tls);
+    }
+
+    /// Enable `https` URLs with the TLS 1.3 client, trusting the system
+    /// roots and the certificates in `ca_cert` (`--ca-cert`).
+    pub fn enable_https(&mut self, ca_cert: Option<&Path>) -> std::io::Result<()> {
+        self.set_tls(Arc::new(crate::tls::Connector::with_roots(ca_cert)?));
+        Ok(())
     }
 
     pub fn set_timeouts(&mut self, timeouts: Timeouts) {

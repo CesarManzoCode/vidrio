@@ -2,8 +2,8 @@
 //!
 //! The HTTP client only needs a bidirectional stream with read and write
 //! timeouts. Plain `http` uses a `TcpStream`; `https` wraps the connected
-//! socket with a [`TlsConnector`] registered on the client (filled in by the
-//! TLS 1.3 implementation).
+//! socket with a [`TlsConnector`] registered on the client
+//! (`crate::tls::Connector`, see `Client::enable_https`).
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
