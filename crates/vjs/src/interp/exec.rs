@@ -377,21 +377,13 @@ fn exec(agent: &mut Agent, frame: &mut Frame, op: Op) -> JsResult<Step> {
         }
         Op::ResolveRef(i) => {
             let name = frame.code.atoms[i as usize];
-            let base = match env_ops::lookup(agent, frame.env, name)? {
-                Found::Object(o, _) => Value::Object(o),
-                Found::Unresolvable => Value::Undefined,
-                _ => Value::Null,
-            };
-            frame.push(base);
+            let found = env_ops::lookup(agent, frame.env, name)?;
+            frame.push(env_ops::reference_base(found));
         }
         Op::GetRef(i) => {
             let name = frame.code.atoms[i as usize];
             let base = frame.top();
-            let found = match base {
-                Value::Object(o) => Found::Object(o, false),
-                Value::Null => env_ops::lookup(agent, frame.env, name)?,
-                _ => Found::Unresolvable,
-            };
+            let found = env_ops::reference_binding(agent, base, name);
             let v = env_ops::get_binding_value(agent, found, name, strict)?;
             frame.push(v);
         }
@@ -399,11 +391,7 @@ fn exec(agent: &mut Agent, frame: &mut Frame, op: Op) -> JsResult<Step> {
             let name = frame.code.atoms[name as usize];
             let v = frame.pop();
             let base = frame.pop();
-            let found = match base {
-                Value::Object(o) => Found::Object(o, false),
-                Value::Null => env_ops::lookup(agent, frame.env, name)?,
-                _ => Found::Unresolvable,
-            };
+            let found = env_ops::reference_binding(agent, base, name);
             env_ops::set_binding(agent, found, name, v, strict)?;
             frame.push(v);
         }

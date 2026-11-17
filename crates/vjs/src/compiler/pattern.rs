@@ -152,8 +152,10 @@ impl Compiler<'_> {
                 self.load_hidden(Hidden::This);
                 match property {
                     MemberProperty::Computed(k) => {
+                        // The key stays a value: ToPropertyKey runs after
+                        // GetSuperBase and, for an assignment, after the
+                        // right-hand side (in the get or the set).
                         self.expr(k);
-                        self.emit(Op::ToPropertyKey);
                         self.load_hidden(Hidden::Function);
                         self.emit(Op::SuperBase);
                         Prepared::SuperComputed

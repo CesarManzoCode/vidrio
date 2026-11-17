@@ -37,6 +37,12 @@ pub struct ScopeNames {
     /// The environment receives `var` declarations (function bodies,
     /// static blocks, strict `eval` code): the VariableEnvironment.
     pub var_scope: bool,
+    /// The function environment of a sloppy function with parameter
+    /// expressions: while the parameters are evaluated it is also the
+    /// VariableEnvironment that receives the `var` declarations of a
+    /// direct `eval` (FunctionDeclarationInstantiation keeps `calleeEnv`
+    /// as VariableEnvironment until the body's own one exists).
+    pub param_scope: bool,
     /// The environment of a `catch (e)` clause with a simple parameter
     /// (Annex B.3.4: `var e` inside `eval` does not conflict).
     pub simple_catch: bool,
@@ -181,6 +187,10 @@ impl EnvData {
             EnvKind::Global(_) => true,
             _ => false,
         }
+    }
+
+    pub fn is_param_scope(&self) -> bool {
+        matches!(&self.kind, EnvKind::Declarative(Some(n)) if n.param_scope)
     }
 }
 

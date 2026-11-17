@@ -115,6 +115,53 @@ pub fn lookup(agent: &mut Agent, env: Env, name: Atom) -> JsResult<Found> {
     Ok(Found::Unresolvable)
 }
 
+/// The base of a Reference resolved by `ResolveRef`: the binding object,
+/// the declarative Environment Record (its arena index as a number) or
+/// `undefined`. The record stays reachable from the running environment
+/// until the matching `GetRef`/`SetRef`.
+pub(crate) fn reference_base(found: Found) -> Value {
+    match found {
+        Found::Object(o, _) => Value::Object(o),
+        Found::Slot(e, _) | Found::EvalVar(e, _) | Found::GlobalLexical(e, _) => {
+            Value::Number(f64::from(e.index()))
+        }
+        Found::Unresolvable => Value::Undefined,
+    }
+}
+
+/// The binding of `name` in the base of a Reference built by
+/// `reference_base`: PutValue and GetValue use that record, not a new
+/// resolution, even if evaluating the right-hand side created a closer
+/// binding (direct `eval`) or a `with` object gained the property.
+pub(crate) fn reference_binding(agent: &Agent, base: Value, name: Atom) -> Found {
+    let e = match base {
+        Value::Object(o) => return Found::Object(o, false),
+        Value::Number(n) => Env::from_index(n as u32),
+        _ => return Found::Unresolvable,
+    };
+    let data = agent.heap.env(e);
+    match &data.kind {
+        EnvKind::Declarative(names) => {
+            if let Some(i) = names.as_ref().and_then(|n| n.find(name)) {
+                Found::Slot(e, i as u32)
+            } else if let Some(i) = data
+                .eval_vars
+                .as_ref()
+                .and_then(|v| v.iter().position(|(a, _)| *a == name))
+            {
+                Found::EvalVar(e, i)
+            } else {
+                Found::Unresolvable
+            }
+        }
+        EnvKind::Global(g) => match g.lexical.get(&name) {
+            Some(&slot) => Found::GlobalLexical(e, slot),
+            None => Found::Unresolvable,
+        },
+        EnvKind::Object { object, .. } => Found::Object(*object, false),
+    }
+}
+
 fn tdz_error<T>(agent: &mut Agent, name: Atom) -> JsResult<T> {
     let n = name_string(agent, name);
     agent.reference_error(&format!("cannot access '{n}' before initialization"))
@@ -534,7 +581,7 @@ fn var_env_of(agent: &Agent, env: Env) -> Env {
     let mut cur = env;
     loop {
         let data = agent.heap.env(cur);
-        if data.is_var_scope() {
+        if data.is_var_scope() || data.is_param_scope() {
             return cur;
         }
         match data.outer {
@@ -542,6 +589,11 @@ fn var_env_of(agent: &Agent, env: Env) -> Env {
             None => return cur,
         }
     }
+}
+
+/// A binding of the parameter scope `env` itself (not one added by `eval`).
+fn param_scope_has(agent: &Agent, env: Env, name: Atom) -> bool {
+    matches!(&agent.heap.env(env).kind, EnvKind::Declarative(Some(n)) if n.find(name).is_some())
 }
 
 fn declarative_has(agent: &Agent, env: Env, name: Atom) -> bool {
@@ -580,6 +632,18 @@ pub fn eval_declaration_instantiation(
     if is_global {
         for &name in &var_like {
             if has_lexical(agent, var_env, name) {
+                let n = name_string(agent, name);
+                return agent.syntax_error(&format!("identifier '{n}' has already been declared"));
+            }
+        }
+    }
+    // A parameter scope is both the VariableEnvironment and, in the
+    // specification, the separate environment of the parameters that the
+    // loop below checks: a `var` named like a parameter (or `arguments`)
+    // is a SyntaxError.
+    if agent.heap.env(var_env).is_param_scope() {
+        for &name in &var_like {
+            if param_scope_has(agent, var_env, name) {
                 let n = name_string(agent, name);
                 return agent.syntax_error(&format!("identifier '{n}' has already been declared"));
             }
@@ -624,7 +688,8 @@ pub fn eval_declaration_instantiation(
     let mut declared = var_like;
     let mut enabled = Vec::new();
     for &(name, reg) in &decls.annex_b {
-        let mut binding_exists = false;
+        let mut binding_exists =
+            agent.heap.env(var_env).is_param_scope() && param_scope_has(agent, var_env, name);
         let mut this_env = lex_env;
         while this_env != var_env {
             let data = agent.heap.env(this_env);

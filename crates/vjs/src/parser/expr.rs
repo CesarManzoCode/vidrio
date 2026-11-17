@@ -1599,6 +1599,20 @@ impl<'a> Parser<'a> {
 /// everything else (property accesses, web-compat calls) is kept as an
 /// expression.
 fn simple_pattern(e: Expr) -> Pattern {
+    let mut inner = &e;
+    while let ExprKind::Paren(x) = &inner.kind {
+        inner = x;
+    }
+    // `(x) = f`: a parenthesized identifier is not an IdentifierRef, so the
+    // assignment does no NamedEvaluation; the parentheses stay.
+    let paren_ident =
+        matches!(e.kind, ExprKind::Paren(_)) && matches!(inner.kind, ExprKind::Ident(_));
+    if paren_ident {
+        return Pattern {
+            span: e.span,
+            kind: PatternKind::Expr(Box::new(e)),
+        };
+    }
     match e.kind {
         ExprKind::Paren(inner) => simple_pattern(*inner),
         ExprKind::Ident(name) => Pattern {

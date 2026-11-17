@@ -120,8 +120,8 @@ pub enum Op {
     /// `[] → [f this]`: callee lookup with the `with` object as `this`.
     GetNameWithThis(u32),
     /// `[] → [base]`: resolves a reference before the right-hand side is
-    /// evaluated (the binding object, `null` for a declarative binding,
-    /// `undefined` if unresolvable).
+    /// evaluated (the binding object, the arena index of the declarative
+    /// Environment Record as a number, `undefined` if unresolvable).
     ResolveRef(u32),
     /// `[base] → [base v]`.
     GetRef(u32),

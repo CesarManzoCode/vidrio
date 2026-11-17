@@ -190,7 +190,8 @@ impl Compiler<'_> {
 
         let mut scope = Scope::new(ScopeKind::Function);
         scope.var_scope = !has_param_exprs;
-        scope.tainted = !strict && has_eval && !has_param_exprs;
+        scope.param_scope = !strict && has_eval && has_param_exprs;
+        scope.tainted = !strict && has_eval;
         for n in &names {
             scope.declare(n, if has_param_exprs { BIND_TDZ } else { 0 });
         }

@@ -92,6 +92,8 @@ pub(crate) struct Scope {
     /// Index of its layout in `Code::scopes`.
     pub index: Option<usize>,
     pub var_scope: bool,
+    /// See `ScopeNames::param_scope`.
+    pub param_scope: bool,
     pub simple_catch: bool,
     /// Sloppy direct `eval` can add bindings here at run time.
     pub tainted: bool,
@@ -107,6 +109,7 @@ impl Scope {
             flags: Vec::new(),
             index: None,
             var_scope: false,
+            param_scope: false,
             simple_catch: false,
             tainted: false,
             hidden: [None; 3],
@@ -498,6 +501,7 @@ impl<'a> Compiler<'a> {
             names,
             flags: scope.flags.clone(),
             var_scope: scope.var_scope,
+            param_scope: scope.param_scope,
             simple_catch: scope.simple_catch,
             this_slot: scope.hidden[0],
             new_target_slot: scope.hidden[1],

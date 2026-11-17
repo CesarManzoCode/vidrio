@@ -412,8 +412,9 @@ impl Compiler<'_> {
                 self.load_hidden(Hidden::This);
                 match property {
                     MemberProperty::Computed(k) => {
+                        // GetSuperBase comes before ToPropertyKey, which the
+                        // get does.
                         self.expr(k);
-                        self.emit(Op::ToPropertyKey);
                         self.load_hidden(Hidden::Function);
                         self.emit(Op::SuperBase);
                         self.emit(Op::GetSuperComputed);
@@ -496,6 +497,12 @@ impl Compiler<'_> {
 
     /// An optional chain: `short` is pushed when it short-circuits.
     pub(crate) fn optional_chain(&mut self, short: Op, body: impl FnOnce(&mut Self)) {
+        self.optional_chain_with(&[short], body);
+    }
+
+    /// An optional chain that pushes every op of `short` when it
+    /// short-circuits.
+    fn optional_chain_with(&mut self, short: &[Op], body: impl FnOnce(&mut Self)) {
         self.fs().opt_chains.push(Vec::new());
         body(self);
         let sites = self.fs().opt_chains.pop().unwrap_or_default();
@@ -507,7 +514,9 @@ impl Compiler<'_> {
         for (label, pops) in sites {
             self.bind(label);
             self.emit(Op::PopN(pops));
-            self.emit(short);
+            for op in short {
+                self.emit(*op);
+            }
             self.jump(end);
         }
         self.bind(end);
@@ -551,6 +560,17 @@ impl Compiler<'_> {
             {
                 self.callee(inner)
             }
+            // `(a?.b)()`: the chain keeps its `this`; short-circuiting gives
+            // `[undefined undefined]` and the call throws.
+            ExprKind::Paren(inner)
+                if matches!(&inner.kind, ExprKind::OptionalChain(x)
+                    if matches!(x.kind, ExprKind::Member { .. } | ExprKind::SuperMember(_))) =>
+            {
+                let ExprKind::OptionalChain(x) = &inner.kind else {
+                    unreachable!("optional chain callee");
+                };
+                self.optional_chain_with(&[Op::Undefined, Op::Undefined], |c| c.callee(x));
+            }
             ExprKind::Ident(name) => match self.resolve(name) {
                 Binding::Local { hops, slot, .. } => {
                     self.emit(Op::GetLocal { hops, slot });
@@ -589,8 +609,9 @@ impl Compiler<'_> {
                 self.load_hidden(Hidden::This);
                 match property {
                     MemberProperty::Computed(k) => {
+                        // GetSuperBase comes before ToPropertyKey, which the
+                        // get does.
                         self.expr(k);
-                        self.emit(Op::ToPropertyKey);
                         self.load_hidden(Hidden::Function);
                         self.emit(Op::SuperBase);
                         self.emit(Op::GetSuperMethodComputed);
@@ -626,7 +647,8 @@ impl Compiler<'_> {
         if optional {
             self.optional_check(1, 2);
         }
-        let direct_eval = Self::is_eval_callee(callee);
+        // `eval?.(x)` is an optional call, never a direct eval.
+        let direct_eval = !optional && Self::is_eval_callee(callee);
         let argc = self.arguments(args);
         if direct_eval {
             let site = self.eval_site();
@@ -885,10 +907,13 @@ impl Compiler<'_> {
         }
     }
 
-    /// `[this key base] → [this key base old]`.
+    /// `[this key base] → [this key' base old]`, with `key'` the property
+    /// key: the reference keeps the converted key, so the store does not
+    /// convert it again.
     fn super_computed_keep(&mut self) {
         let (rt, rk, rb) = (self.alloc_reg(), self.alloc_reg(), self.alloc_reg());
         self.emit(Op::StoreReg(rb));
+        self.emit(Op::ToPropertyKey);
         self.emit(Op::StoreReg(rk));
         self.emit(Op::StoreReg(rt));
         for r in [rt, rk, rb, rt, rk, rb] {
@@ -936,8 +961,13 @@ impl Compiler<'_> {
                 }
                 PatternKind::Expr(e) => {
                     let prepared = self.prepare_expr_target(e);
+                    // A parenthesized identifier is not an IdentifierRef:
+                    // no NamedEvaluation.
+                    let paren = matches!(e.kind, ExprKind::Paren(_));
                     let name = match &prepared {
-                        Prepared::Ident(n) | Prepared::DynamicIdent(n) => Some(n.to_string()),
+                        Prepared::Ident(n) | Prepared::DynamicIdent(n) if !paren => {
+                            Some(n.to_string())
+                        }
                         _ => None,
                     };
                     if let (Prepared::Ident(n), true) = (&prepared, name.is_some()) {
@@ -985,7 +1015,8 @@ impl Compiler<'_> {
         while let ExprKind::Paren(x) = &inner.kind {
             inner = x;
         }
-        let ident = match &inner.kind {
+        // NamedEvaluation only for an IdentifierRef, not `(x)`.
+        let ident = match &arg.kind {
             ExprKind::Ident(n) => Some(n.clone()),
             _ => None,
         };
