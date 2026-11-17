@@ -71,6 +71,7 @@ Consultas del 2026-11-09. Cada entrada dice qué se tomó de la fuente y cómo s
 | 47 | RFC 8446 (TLS 1.3), RFC 5280 (X.509), RFC 7748 (X25519), RFC 8017 (RSA), FIPS 186-5 (ECDSA), RFC 5869 (HKDF), RFC 8439 (ChaCha20-Poly1305), NIST SP 800-38D (GCM), RFC 9112 (HTTP/1.1), RFC 1951/1950/1952 (deflate, zlib, gzip), RFC 7932 (Brotli) | — | Red |
 | 48 | OpenType 1.9.1, https://learn.microsoft.com/typography/opentype/spec/ ; WOFF 1.0 y WOFF2 (W3C) | — | Fuentes |
 | 49 | PNG (W3C, 3.ª ed.), GIF89a, JPEG (ITU T.81) | — | Imágenes |
+| 50 | WHATWG HTML, tabla de referencias de caracteres con nombre, https://html.spec.whatwg.org/entities.json | Descargado el 2026-11-17T03:16:10Z (UTC); 145 897 bytes, 2231 nombres; sha256 `d741d877ac77c4194c4ad526b5b4a19aef8dfe411ab840a466891cdbb9f362e6` | Tabla `ENTITIES` del tokenizador HTML, generada por `crates/vidrio/gen/entities.py`, que rechaza otro sha256 |
 
 ## 5. Antecedentes (de la investigación adjunta)
 

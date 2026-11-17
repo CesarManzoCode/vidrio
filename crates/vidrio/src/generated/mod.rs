@@ -7,4 +7,6 @@ pub mod encoding_labels;
 #[rustfmt::skip]
 pub mod encoding_single_byte;
 #[rustfmt::skip]
+pub mod html_entities;
+#[rustfmt::skip]
 pub mod idna;
