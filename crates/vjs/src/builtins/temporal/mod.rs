@@ -1161,7 +1161,7 @@ pub(crate) fn to_temporal_time(agent: &mut Agent, item: Value, options: Value) -
     }
     let text = string_arg(agent, item)?;
     let parsed = tr(agent, parse::parse_iso_date_time(&text, Kind::Time))?;
-    parsed_calendar(agent, &parsed)?;
+    // The calendar annotation is ignored, even an unknown one.
     let Some(time) = parsed.time else {
         return agent.range_error("string has no time");
     };
@@ -1191,7 +1191,7 @@ pub(crate) fn to_temporal_instant(agent: &mut Agent, item: Value) -> JsResult<i1
     };
     let text = agent.heap.string_to_rust(s);
     let parsed = tr(agent, parse::parse_iso_date_time(&text, Kind::Instant))?;
-    parsed_calendar(agent, &parsed)?;
+    // The calendar annotation is ignored, even an unknown one.
     let date = IsoDate::new(parsed.year.unwrap_or(0), parsed.month, parsed.day);
     let dt = DateTime::new(date, parsed.time.unwrap_or(Time::MIDNIGHT));
     let offset = if parsed.z {

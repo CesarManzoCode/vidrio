@@ -37,8 +37,6 @@ pub struct Parsed {
     pub calendar: Option<String>,
 }
 
-const MINUS: char = '\u{2212}';
-
 struct P {
     s: Vec<char>,
     i: usize,
@@ -108,7 +106,7 @@ impl P {
     }
 
     fn sign(&mut self) -> Option<i64> {
-        match self.eat_any(&['+', '-', MINUS])? {
+        match self.eat_any(&['+', '-'])? {
             '+' => Some(1),
             _ => Some(-1),
         }
@@ -279,7 +277,7 @@ impl P {
                 self.i += 1;
                 out.z = true;
             }
-            Some('+' | '-' | MINUS) => out.offset = Some(self.offset(true)?),
+            Some('+' | '-') => out.offset = Some(self.offset(true)?),
             _ => {}
         }
         Ok(())
@@ -788,5 +786,15 @@ mod tests {
         assert!(parse_iso_date_time("T1214", Kind::Time).is_ok());
         assert!(parse_iso_date_time("1214", Kind::Time).is_err());
         assert!(parse_iso_date_time("12:34Z", Kind::Time).is_err());
+    }
+
+    #[test]
+    fn unicode_minus_sign_is_rejected() {
+        assert!(
+            parse_iso_date_time("1976-11-18T15:23:30.12\u{2212}02:00", Kind::DateTime).is_err()
+        );
+        assert!(parse_iso_date_time("\u{2212}009999-11-18", Kind::DateTime).is_err());
+        assert!(parse_offset_identifier("\u{2212}02:00").is_none());
+        assert!(parse_duration("\u{2212}P1D").is_err());
     }
 }
