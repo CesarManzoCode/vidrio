@@ -559,7 +559,7 @@ fn async_iterator_async_dispose(agent: &mut Agent, call: NativeCall<'_>) -> JsRe
         let Some(ret) = ops::get_method(agent, o, key)? else {
             return Ok(None);
         };
-        let r = ops::call(agent, ret, o, &[Value::Undefined])?;
+        let r = ops::call(agent, ret, o, &[])?;
         let promise_ctor = agent.intrinsic(Intrinsic::Promise);
         promise_resolve(agent, promise_ctor, r).map(Some)
     })();

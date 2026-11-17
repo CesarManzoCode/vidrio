@@ -629,19 +629,15 @@ fn copy_within(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
         let limit = len * size + offset;
         let to = target as usize * size + offset;
         let from = start as usize * size + offset;
-        let count_bytes = count as usize * size;
-        if from < to && to < from + count_bytes {
-            // Backwards: nothing is copied if the last byte is past the
-            // limit.
-            if to + count_bytes <= limit {
-                let bytes = buffer::read_bytes(agent, buf, from, count_bytes);
-                buffer::write_bytes(agent, buf, to, &bytes);
-            }
-        } else {
-            let n = count_bytes
-                .min(limit.saturating_sub(from))
-                .min(limit.saturating_sub(to));
-            buffer::copy_bytes_forward(agent, buf, from, buf, to, n);
+        // The count is clamped to what still fits below the limit of the
+        // (possibly shrunk) view before the direction is chosen; the copy
+        // then behaves as memmove.
+        let count_bytes = (count as usize * size)
+            .min(limit.saturating_sub(from))
+            .min(limit.saturating_sub(to));
+        if count_bytes > 0 {
+            let bytes = buffer::read_bytes(agent, buf, from, count_bytes);
+            buffer::write_bytes(agent, buf, to, &bytes);
         }
     }
     Ok(Value::Object(o))

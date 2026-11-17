@@ -354,18 +354,21 @@ fn resolve(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     promise::promise_resolve(agent, c, call.arg(0))
 }
 
-/// `Promise.try(callbackfn, ...args)`.
+/// `Promise.try(callbackfn, ...args)`. A normal result goes through
+/// PromiseResolve, so a promise of the receiver comes back unwrapped.
 fn try_(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
-    if !call.this.is_object() {
+    let Value::Object(c) = call.this else {
         return agent.type_error("Promise.try called on a non-object");
-    }
-    let cap = promise::new_promise_capability(agent, call.this)?;
+    };
     let args = call.args.get(1..).unwrap_or(&[]);
     match ops::call(agent, call.arg(0), Value::Undefined, args) {
-        Ok(v) => ops::call(agent, cap.resolve, Value::Undefined, &[v])?,
-        Err(Throw(e)) => ops::call(agent, cap.reject, Value::Undefined, &[e])?,
-    };
-    Ok(cap.promise)
+        Ok(v) => promise::promise_resolve(agent, c, v),
+        Err(Throw(e)) => {
+            let cap = promise::new_promise_capability(agent, call.this)?;
+            ops::call(agent, cap.reject, Value::Undefined, &[e])?;
+            Ok(cap.promise)
+        }
+    }
 }
 
 /// `Promise.withResolvers()`.

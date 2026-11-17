@@ -404,18 +404,30 @@ pub fn exponent_digits(x: f64, digits: u32) -> (String, i32) {
     debug_assert!(x.is_finite() && x > 0.0 && digits >= 1);
     let low = BigInt::pow10(digits - 1);
     let high = BigInt::pow10(digits);
+    // The exact floor(log10 x) first: estimating `e` from the rounded `n`
+    // picks `10^(digits-1)` one decade too high when x sits just below a
+    // power of ten (9.999…e-22 is not 1.000…e-21 at 16 digits).
     let mut e = x.log10().floor() as i32;
+    let mut exact = false;
     for _ in 0..4 {
-        let n = scaled_round(x, digits as i32 - 1 - e);
-        if n.cmp_bigint(&high) != Ordering::Less {
-            e += 1;
-        } else if n.cmp_bigint(&low) == Ordering::Less {
+        let (num, den) = scaled_fraction(x, -e);
+        if num.cmp_bigint(&den) == Ordering::Less {
             e -= 1;
+        } else if num.cmp_bigint(&den.mul(&BigInt::pow10(1))) != Ordering::Less {
+            e += 1;
         } else {
-            return (n.to_string_radix(10), e);
+            exact = true;
+            break;
         }
     }
-    unreachable!("the decimal exponent estimate is off by at most one")
+    assert!(exact, "the decimal exponent estimate is off by at most one");
+    let n = scaled_round(x, digits as i32 - 1 - e);
+    if n.cmp_bigint(&high) != Ordering::Less {
+        // Rounding carried into the next decade: x rounds to 10^(e+1).
+        (low.to_string_radix(10), e + 1)
+    } else {
+        (n.to_string_radix(10), e)
+    }
 }
 
 /// `Number.prototype.toFixed` for a finite `x` and `0 ≤ f ≤ 100`.

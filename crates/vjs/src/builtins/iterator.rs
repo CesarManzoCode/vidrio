@@ -884,6 +884,14 @@ fn limit_argument(agent: &mut Agent, o: Object, limit: Value) -> JsResult<f64> {
     if num.is_nan() {
         return close_with_error(agent, o, ErrorKind::Range, "the limit is NaN");
     }
+    if num.is_finite() && num > MAX_SAFE_INTEGER {
+        return close_with_error(
+            agent,
+            o,
+            ErrorKind::Range,
+            "the limit is above Number.MAX_SAFE_INTEGER",
+        );
+    }
     let int = ops::f64_to_integer_or_infinity(num);
     if int < 0.0 {
         return close_with_error(agent, o, ErrorKind::Range, "the limit is negative");

@@ -71,6 +71,19 @@ pub fn make_closure(agent: &mut Agent, code: &Rc<Code>, env: Env, home: Option<O
     if let Some(name) = code.name {
         set_function_name(agent, f, PropertyKey::String(name), None);
     }
+    if !code.strict && flags.is_constructor && !flags.is_class_constructor && home.is_none() {
+        // The `caller` extension of sloppy plain functions (§17.1 allows it
+        // as long as it never exposes a strict function): always `null`,
+        // so reading it does not reach %ThrowTypeError% on
+        // %Function.prototype%.
+        let key = PropertyKey::String(agent.heap.names.caller);
+        agent.heap.set_own(
+            f,
+            key,
+            Attributes::data(false, false, false),
+            Slot::Data(Value::Null),
+        );
+    }
     if flags.is_generator {
         let which = if flags.is_async {
             Intrinsic::AsyncGeneratorPrototype

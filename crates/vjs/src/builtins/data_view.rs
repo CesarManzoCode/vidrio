@@ -160,7 +160,8 @@ fn get_byte_length(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     let (buffer, offset, length) = this_view(agent, call.this, "byteLength")?;
     match view_byte_length(agent, buffer, offset, length) {
         Some(len) => Ok(Value::Number(len as f64)),
-        None => agent.type_error("DataView.prototype.byteLength: the view is out of bounds"),
+        // An out-of-bounds or detached view reports +0 (no TypeError).
+        None => Ok(Value::Number(0.0)),
     }
 }
 
@@ -168,7 +169,7 @@ fn get_byte_offset(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<Value> {
     let (buffer, offset, length) = this_view(agent, call.this, "byteOffset")?;
     match view_byte_length(agent, buffer, offset, length) {
         Some(_) => Ok(Value::Number(offset as f64)),
-        None => agent.type_error("DataView.prototype.byteOffset: the view is out of bounds"),
+        None => Ok(Value::Number(0.0)),
     }
 }
 
