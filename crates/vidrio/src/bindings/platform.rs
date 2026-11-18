@@ -70,6 +70,13 @@ pub enum Native {
         message: String,
     },
     Implementation(DocRef),
+    /// The native state of an object of the data APIs of k3-11 (fetch,
+    /// files, URLs, encodings, streams; see `crate::fetch`).
+    Data(Rc<dyn Any>),
+    /// An event target with native state (`XMLHttpRequest`,
+    /// `FileReader`): its host id, as for [`Native::EventTarget`], and its
+    /// state.
+    TargetData(u64, Rc<dyn Any>),
     /// An iterator of a pair iterable, maplike or setlike.
     Iterator {
         target: Object,

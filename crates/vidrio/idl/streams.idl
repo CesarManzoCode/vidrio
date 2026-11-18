@@ -1,0 +1,28 @@
+// The subset of the Streams Standard (https://streams.spec.whatwg.org/)
+// that vidrio implements (k3-11): a readable stream with a default reader,
+// for `Response.body`, `Request.body` and `Blob.stream()`. Streams cannot
+// be constructed from script (LIMITATIONS.md).
+
+[Exposed=*]
+interface ReadableStream {
+  readonly attribute boolean locked;
+
+  Promise<undefined> cancel(optional any reason);
+  ReadableStreamDefaultReader getReader(optional ReadableStreamGetReaderOptions options = {});
+};
+
+enum ReadableStreamReaderMode { "byob" };
+
+dictionary ReadableStreamGetReaderOptions {
+  ReadableStreamReaderMode mode;
+};
+
+[Exposed=*]
+interface ReadableStreamDefaultReader {
+  constructor(ReadableStream stream);
+
+  Promise<any> read();
+  undefined releaseLock();
+  readonly attribute Promise<undefined> closed;
+  Promise<undefined> cancel(optional any reason);
+};

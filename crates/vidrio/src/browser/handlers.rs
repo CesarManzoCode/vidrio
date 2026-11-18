@@ -103,7 +103,9 @@ fn target_of(p: &PlatformRef, state: &RealmState) -> Option<(DocRef, Target)> {
         Native::Node(d, n) => Some((d.clone(), Target::Node(*n))),
         Native::AbortSignal(d, s) => Some((d.clone(), Target::Signal(*s))),
         Native::Window => state.document().map(|d| (d, Target::Window)),
-        Native::EventTarget(id) => state.document().map(|d| (d, Target::Other(*id))),
+        Native::EventTarget(id) | Native::TargetData(id, _) => {
+            state.document().map(|d| (d, Target::Other(*id)))
+        }
         _ => None,
     }
 }

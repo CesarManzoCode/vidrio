@@ -5,8 +5,10 @@
 //! tests need to reach their subjects: `window`, `document`, `body`,
 //! `head`, `title`, `innerHTML`, `outerHTML` and slots).
 //!
-//! Members of HTML, CSSOM, fetch and the rest exist on their objects and
-//! throw a `TypeError` until their sprints implement them, except for
+//! Members of CSSOM and the rest exist on their objects and throw a
+//! `TypeError` until their sprints implement them (HTML and the data APIs
+//! are routed to `crate::browser::members` and `crate::fetch` first),
+//! except for
 //! three generic cases: event handler attributes (`on…`) keep the value
 //! they are given, and the index count and supported names of legacy
 //! platform objects without an implementation are empty.
@@ -64,10 +66,14 @@ type R = JsResult<IdlValue>;
 pub fn call(agent: &mut Agent, inv: &mut Invocation) -> R {
     let state = current_state(agent)?;
     let this_doc = with_this(inv, |n| n.document().cloned());
-    // The members of HTML (k3-10) live with the user agent.
-    let result = match crate::browser::members::call(agent, &state, inv) {
+    // The members of HTML (k3-10) live with the user agent, those of the
+    // data APIs (k3-11) in `crate::fetch`.
+    let result = match crate::fetch::call(agent, &state, inv) {
         Some(r) => r,
-        None => run(agent, &state, inv),
+        None => match crate::browser::members::call(agent, &state, inv) {
+            Some(r) => r,
+            None => run(agent, &state, inv),
+        },
     };
     if let Some(doc) = &this_doc {
         queue_observer_microtask(agent, doc);
@@ -457,7 +463,7 @@ fn this_target(
         Native::Node(d, id) => Some((Some(d.clone()), Target::Node(*id))),
         Native::AbortSignal(d, s) => Some((Some(d.clone()), Target::Signal(*s))),
         Native::Window => Some((None, Target::Window)),
-        Native::EventTarget(id) => Some((None, Target::Other(*id))),
+        Native::EventTarget(id) | Native::TargetData(id, _) => Some((None, Target::Other(*id))),
         _ => None,
     });
     match v {

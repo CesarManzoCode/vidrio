@@ -388,4 +388,9 @@ impl DomHost for JsHost<'_> {
             .borrow_mut()
             .push((self.doc.clone(), signal, milliseconds));
     }
+
+    fn run_abort_algorithm(&mut self, _signal: SignalId, algorithm: u64) {
+        self.give_back();
+        crate::fetch::run_abort_algorithm(self.agent, algorithm);
+    }
 }

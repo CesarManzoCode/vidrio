@@ -1,14 +1,17 @@
-//! vidrio: the browser engine (HTML, DOM, CSS, layout, painting, X11 window, WebDriver).
+//! vidrio: the browser engine (HTML, XML, DOM, fetch, CSS, layout, painting, X11 window,
+//! WebDriver).
 
 pub mod bindings;
 pub mod browser;
 pub mod css;
 pub mod dom;
 pub mod encoding;
+pub mod fetch;
 pub mod generated;
 pub mod html;
 pub mod mime;
 pub mod url;
+pub mod xml;
 
 /// The Web IDL generator of `build.rs`, compiled here too so that its
 /// unit tests run with the library's.

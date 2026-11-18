@@ -20,9 +20,11 @@
 //!   (vault/CONTRACT.md §3.4);
 //! - [`host`] implements [`crate::dom::host::DomHost`] so that DOM
 //!   algorithms call listeners, observers and filters;
-//! - [`imp`] implements the members natively on top of `crate::dom`.
-//!   Members without an implementation (HTML, CSSOM, fetch, …) exist on
-//!   their objects and throw a `TypeError` when used.
+//! - [`imp`] implements the members natively on top of `crate::dom`,
+//!   after `crate::fetch` (the data APIs of k3-11) and
+//!   `crate::browser::members` (HTML) had their turn. Members without an
+//!   implementation (CSSOM, UI Events, …) exist on their objects and throw
+//!   a `TypeError` when used.
 
 pub mod convert;
 pub mod exception;

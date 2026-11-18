@@ -98,6 +98,9 @@ pub struct UserAgent {
     pub next_script: Cell<script::ScriptId>,
     pub modules: RefCell<module::ModuleMaps>,
     pub ports: RefCell<messaging::Ports>,
+    /// The state of the data APIs (k3-11): rooted values, cookies, abort
+    /// algorithms.
+    pub fetch: crate::fetch::FetchState,
 }
 
 impl Trace for UserAgent {
@@ -111,6 +114,7 @@ impl Trace for UserAgent {
         }
         self.modules.borrow().trace(tracer);
         self.ports.borrow().trace(tracer);
+        self.fetch.trace(tracer);
     }
 }
 
@@ -127,6 +131,7 @@ impl UserAgent {
             next_script: Cell::new(1),
             modules: RefCell::new(module::ModuleMaps::default()),
             ports: RefCell::new(messaging::Ports::default()),
+            fetch: crate::fetch::FetchState::default(),
             options,
         }
     }

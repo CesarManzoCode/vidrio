@@ -2,10 +2,13 @@
 //!
 //! [`Network`] runs HTTP(S) requests on the thread pool of vnet
 //! (vault/CONTRACT.md §3.2) and answers `file:`, `data:` and `about:` URLs
-//! itself. Responses come back to the main thread over a channel;
-//! [`poll_network`] turns every response event into a task of the
+//! itself, and `blob:` URLs from the blob URL store of
+//! [`crate::fetch::blob`]. Responses come back to the main thread over a
+//! channel; [`poll_network`] turns every response event into a task of the
 //! networking task source, so callbacks always run on the event loop.
-//! Redirects are followed here (at most 20).
+//! Redirects are followed here (at most 20), except for the requests of
+//! [`fetch_request`] with [`NetRequest::manual_redirects`]: the Fetch
+//! Standard algorithms of `crate::fetch::net` follow those themselves.
 //!
 //! [`start_navigation`] loads the document of a navigation: it decides the
 //! character encoding (BOM, the `charset` of `Content-Type`, the prescan of
@@ -28,7 +31,7 @@ use super::UserAgent;
 use super::document::{self, Readiness};
 use super::event_loop::{TaskSource, queue_task};
 use super::navigable::ContextId;
-use crate::dom::{DocRef, Document};
+use crate::dom::{DocRef, Document, NodeId};
 use crate::encoding::{BomHandling, Decoder, DecoderErrorMode, Encoding, bom_sniff};
 use crate::mime::MimeType;
 use crate::url::Url;
@@ -39,8 +42,20 @@ pub struct ResponseInfo {
     /// The URL after redirects.
     pub url: Url,
     pub status: u16,
+    /// The reason phrase of the status line.
+    pub status_text: String,
     pub content_type: Option<String>,
     pub headers: Vec<(String, String)>,
+}
+
+/// The method, headers and body of a request, and whether redirects are
+/// handed back instead of followed.
+#[derive(Clone, Debug, Default)]
+pub struct NetRequest {
+    pub method: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+    pub manual_redirects: bool,
 }
 
 /// What a fetch reports, in order: `Head`, `Data`…, then `Done` or
@@ -70,6 +85,7 @@ struct Pending {
     redirects: u32,
     document: Option<DocRef>,
     callback: Callback,
+    request: Option<NetRequest>,
 }
 
 /// The network of the user agent.
@@ -134,79 +150,115 @@ impl Network {
     }
 
     /// Starts (or restarts, after a redirect) request `id` for `url`.
-    fn issue(&self, user_agent: &str, id: u64, url: &Url) {
-        match url.scheme.as_str() {
-            "http" | "https" => match vnet::http::Url::parse(&url.serialize(true)) {
-                Ok(u) => {
-                    let mut request = Request::new("GET", u);
-                    request.headers.set("User-Agent", user_agent);
-                    request.headers.set("Accept", "*/*");
-                    let fid = self.start_net(request);
-                    self.by_net.borrow_mut().insert(fid, id);
-                }
-                Err(e) => self.local_event(id, FetchEvent::Failed(e.to_string())),
-            },
-            "file" => self.local_file(id, url),
-            "data" => match parse_data_url(url) {
-                Some((mime, body)) => {
-                    self.local_event(
-                        id,
-                        FetchEvent::Head(ResponseInfo {
-                            url: url.clone(),
-                            status: 200,
-                            content_type: Some(mime.clone()),
-                            headers: vec![("Content-Type".to_string(), mime)],
-                        }),
-                    );
-                    self.local_event(id, FetchEvent::Data(body));
+    fn issue(&self, user_agent: &str, id: u64, url: &Url, net: Option<&NetRequest>) {
+        if !matches!(url.scheme.as_str(), "http" | "https") {
+            match local_fetch(url, net.map_or("GET", |r| r.method.as_str())) {
+                Ok((head, body)) => {
+                    self.local_event(id, FetchEvent::Head(head));
+                    if !body.is_empty() {
+                        self.local_event(id, FetchEvent::Data(body));
+                    }
                     self.local_event(id, FetchEvent::Done);
                 }
-                None => self.local_event(id, FetchEvent::Failed("invalid data: URL".to_string())),
-            },
-            "about" => {
-                let ok = matches!(url.serialize(true).as_str(), "about:blank" | "about:srcdoc");
-                if ok {
-                    self.local_event(
-                        id,
-                        FetchEvent::Head(ResponseInfo {
-                            url: url.clone(),
-                            status: 200,
-                            content_type: Some("text/html;charset=utf-8".to_string()),
-                            headers: Vec::new(),
-                        }),
-                    );
-                    self.local_event(id, FetchEvent::Done);
-                } else {
-                    self.local_event(id, FetchEvent::Failed("unknown about: URL".to_string()));
-                }
+                Err(e) => self.local_event(id, FetchEvent::Failed(e)),
             }
-            other => self.local_event(
-                id,
-                FetchEvent::Failed(format!("unsupported scheme {other}")),
-            ),
+            return;
+        }
+        match http_request(user_agent, url, net) {
+            Ok(request) => {
+                let fid = self.start_net(request);
+                self.by_net.borrow_mut().insert(fid, id);
+            }
+            Err(e) => self.local_event(id, FetchEvent::Failed(e)),
         }
     }
+}
 
-    fn local_file(&self, id: u64, url: &Url) {
-        let raw = crate::url::percent::percent_decode_str(&url.path_string());
-        let path = PathBuf::from(String::from_utf8_lossy(&raw).into_owned());
-        match std::fs::read(&path) {
-            Ok(body) => {
-                let mime = mime_for_path(&path).to_string();
-                self.local_event(
-                    id,
-                    FetchEvent::Head(ResponseInfo {
-                        url: url.clone(),
-                        status: 200,
-                        content_type: Some(mime.clone()),
-                        headers: vec![("Content-Type".to_string(), mime)],
-                    }),
-                );
-                self.local_event(id, FetchEvent::Data(body));
-                self.local_event(id, FetchEvent::Done);
+/// The vnet request for an `http(s)` URL: `GET` with `Accept: */*`
+/// unless `net` says otherwise.
+pub fn http_request(
+    user_agent: &str,
+    url: &Url,
+    net: Option<&NetRequest>,
+) -> Result<Request, String> {
+    let u = vnet::http::Url::parse(&url.serialize(true)).map_err(|e| e.to_string())?;
+    let mut request = Request::new(net.map_or("GET", |r| r.method.as_str()), u);
+    request.headers.set("User-Agent", user_agent);
+    match net {
+        Some(n) => {
+            for (name, value) in &n.headers {
+                request.headers.add(name, value);
             }
-            Err(e) => self.local_event(id, FetchEvent::Failed(format!("{}: {e}", path.display()))),
+            if !n
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("accept"))
+            {
+                request.headers.set("Accept", "*/*");
+            }
+            request.body = n.body.clone();
         }
+        None => request.headers.set("Accept", "*/*"),
+    }
+    Ok(request)
+}
+
+/// The response to a URL that is not `http(s)`: `file:`, `data:`,
+/// `blob:` (from the blob URL store) and `about:blank`/`about:srcdoc`.
+pub fn local_fetch(url: &Url, method: &str) -> Result<(ResponseInfo, Vec<u8>), String> {
+    let head = |content_type: Option<String>, headers: Vec<(String, String)>| ResponseInfo {
+        url: url.clone(),
+        status: 200,
+        status_text: "OK".to_string(),
+        content_type,
+        headers,
+    };
+    match url.scheme.as_str() {
+        "file" => {
+            let raw = crate::url::percent::percent_decode_str(&url.path_string());
+            let path = PathBuf::from(String::from_utf8_lossy(&raw).into_owned());
+            match std::fs::read(&path) {
+                Ok(body) => {
+                    let mime = mime_for_path(&path).to_string();
+                    Ok((
+                        head(Some(mime.clone()), vec![("Content-Type".to_string(), mime)]),
+                        body,
+                    ))
+                }
+                Err(e) => Err(format!("{}: {e}", path.display())),
+            }
+        }
+        "data" => match parse_data_url(url) {
+            Some((mime, body)) => Ok((
+                head(Some(mime.clone()), vec![("Content-Type".to_string(), mime)]),
+                body,
+            )),
+            None => Err("invalid data: URL".to_string()),
+        },
+        "blob" => {
+            // Only `GET` reads a blob URL (Fetch §4.3, scheme fetch).
+            let blob = crate::fetch::blob::resolve_url(&url.serialize(true))
+                .filter(|_| method == "GET")
+                .ok_or_else(|| "invalid blob: URL".to_string())?;
+            let bytes = blob.bytes.to_vec();
+            let headers = vec![
+                ("Content-Length".to_string(), bytes.len().to_string()),
+                ("Content-Type".to_string(), blob.type_.clone()),
+            ];
+            Ok((head(Some(blob.type_.clone()), headers), bytes))
+        }
+        "about" => {
+            if matches!(url.serialize(true).as_str(), "about:blank" | "about:srcdoc") {
+                let mime = "text/html;charset=utf-8".to_string();
+                Ok((
+                    head(Some(mime.clone()), vec![("Content-Type".to_string(), mime)]),
+                    Vec::new(),
+                ))
+            } else {
+                Err("unknown about: URL".to_string())
+            }
+        }
+        other => Err(format!("unsupported scheme {other}")),
     }
 }
 
@@ -294,10 +346,58 @@ pub fn fetch_streaming(
             redirects: 0,
             document,
             callback: Rc::new(RefCell::new(callback)),
+            request: None,
         },
     );
-    net.issue(&ua.options.user_agent, id, &url);
+    net.issue(&ua.options.user_agent, id, &url, None);
     id
+}
+
+/// [`fetch_streaming`] with the method, headers and body of `request`.
+/// With [`NetRequest::manual_redirects`] a redirect response is reported
+/// like any other.
+pub fn fetch_request(
+    ua: &UserAgent,
+    url: Url,
+    request: NetRequest,
+    document: Option<DocRef>,
+    callback: Box<dyn FnMut(&mut Agent, FetchEvent)>,
+) -> u64 {
+    let net = &ua.net;
+    let id = net.next.get();
+    net.next.set(id + 1);
+    net.pending.borrow_mut().insert(
+        id,
+        Pending {
+            url: url.clone(),
+            redirects: 0,
+            document,
+            callback: Rc::new(RefCell::new(callback)),
+            request: Some(request.clone()),
+        },
+    );
+    net.issue(&ua.options.user_agent, id, &url, Some(&request));
+    id
+}
+
+/// Cancels fetch `id`: its callback is not called again.
+pub fn cancel(ua: &UserAgent, id: u64) {
+    let net = &ua.net;
+    if net.pending.borrow_mut().remove(&id).is_none() {
+        return;
+    }
+    let found: Vec<FetchId> = net
+        .by_net
+        .borrow()
+        .iter()
+        .filter(|(_, v)| **v == id)
+        .map(|(k, _)| *k)
+        .collect();
+    for fid in found {
+        net.by_net.borrow_mut().remove(&fid);
+        net.cancel_net(fid);
+    }
+    net.local.borrow_mut().retain(|(i, _)| *i != id);
 }
 
 /// Fetches `url` in full and calls `done` with the response (any status)
@@ -371,12 +471,16 @@ fn handle_message(ua: &UserAgent, message: FetchMessage) {
     };
     match message.event {
         NetEvent::Head(head) => {
-            let redirect = matches!(head.status, 301 | 302 | 303 | 307 | 308);
             let location = head.headers.get("location").map(str::to_string);
-            let (url, redirects) = match net.pending.borrow().get(&id) {
-                Some(p) => (p.url.clone(), p.redirects),
+            let (url, redirects, manual) = match net.pending.borrow().get(&id) {
+                Some(p) => (
+                    p.url.clone(),
+                    p.redirects,
+                    p.request.as_ref().is_some_and(|r| r.manual_redirects),
+                ),
                 None => return,
             };
+            let redirect = !manual && matches!(head.status, 301 | 302 | 303 | 307 | 308);
             if let (true, Some(location)) = (redirect, location) {
                 net.by_net.borrow_mut().remove(&message.id);
                 net.cancel_net(message.id);
@@ -390,7 +494,7 @@ fn handle_message(ua: &UserAgent, message: FetchMessage) {
                             p.url = next.clone();
                             p.redirects += 1;
                         }
-                        net.issue(&ua.options.user_agent, id, &next);
+                        net.issue(&ua.options.user_agent, id, &next, None);
                     }
                     Err(_) => deliver(ua, id, FetchEvent::Failed("bad redirect".to_string())),
                 }
@@ -408,6 +512,7 @@ fn handle_message(ua: &UserAgent, message: FetchMessage) {
                 FetchEvent::Head(ResponseInfo {
                     url,
                     status: head.status,
+                    status_text: head.reason.clone(),
                     content_type,
                     headers,
                 }),
@@ -728,6 +833,8 @@ enum BodyKind {
     Text,
     /// Not shown (images, binaries): an empty document.
     Empty,
+    /// An XML document, parsed by [`crate::xml`] once the body is in.
+    Xml,
 }
 
 /// The loading state of a navigation's document.
@@ -796,6 +903,13 @@ impl DocumentLoad {
         let Some(doc) = self.doc.clone() else {
             return;
         };
+        if self.kind == BodyKind::Xml {
+            if last {
+                let bytes = std::mem::take(&mut self.buffered);
+                load_xml_document(agent, &doc, &bytes, self.content_type.as_deref());
+            }
+            return;
+        }
         if self.kind == BodyKind::Empty {
             self.buffered.clear();
             if last {
@@ -837,6 +951,39 @@ impl DocumentLoad {
     }
 }
 
+/// Parses the body of an XML document with the XML parser of
+/// [`crate::xml`] and runs "the end". The parser's tree changes go through
+/// [`document::process_html_changes`] at the end, so the `script` elements
+/// of an XHTML document run once the whole document is parsed
+/// (LIMITATIONS.md). A not-well-formed document shows the parser's error
+/// instead (XML §5.1).
+fn load_xml_document(agent: &mut Agent, doc: &DocRef, bytes: &[u8], content_type: Option<&str>) {
+    let text = crate::xml::decode(bytes, content_type);
+    {
+        let mut d = doc.borrow_mut();
+        d.encoding = text.1;
+        // One tree change per child of the document, not one per node.
+        let tracking = d.html_tracking;
+        d.html_tracking = false;
+        if let Err(e) = crate::xml::parse_into(&mut d, &text.0) {
+            crate::xml::replace_with_error(&mut d, &e);
+        }
+        d.html_tracking = tracking;
+        if tracking {
+            let children: Vec<NodeId> = d.children(NodeId::DOCUMENT).collect();
+            d.html_changes
+                .extend(children.into_iter().map(crate::dom::HtmlChange::Inserted));
+        }
+    }
+    document::process_html_changes(agent, doc);
+    let Some(ua) = super::ua() else {
+        return;
+    };
+    if let Some(info) = ua.doc_info(doc) {
+        document::the_end(agent, doc, &info);
+    }
+}
+
 /// The body kind of a response with `Content-Type` `content_type`.
 fn body_kind(content_type: Option<&str>) -> (BodyKind, String) {
     let mime = content_type.and_then(MimeType::parse);
@@ -845,9 +992,7 @@ fn body_kind(content_type: Option<&str>) -> (BodyKind, String) {
         .map_or("text/html".to_string(), MimeType::essence);
     let kind = match essence.as_str() {
         "text/html" => BodyKind::Html,
-        // There is no XML parser yet: XML documents parse as HTML
-        // (LIMITATIONS.md).
-        e if e.ends_with("+xml") || e == "application/xml" || e == "text/xml" => BodyKind::Html,
+        e if e.ends_with("+xml") || e == "application/xml" || e == "text/xml" => BodyKind::Xml,
         e if e.starts_with("text/") || e == "application/json" || e == "application/javascript" => {
             BodyKind::Text
         }
@@ -944,6 +1089,9 @@ pub fn start_navigation(_agent: &mut Agent, ua: &UserAgent, request: NavigationR
                         false,
                     ) {
                         Some((doc, generation)) => {
+                            if kind == BodyKind::Xml {
+                                doc.borrow_mut().kind = crate::dom::DocumentKind::Xml;
+                            }
                             if kind == BodyKind::Text {
                                 document::feed_parser(agent, &doc, generation, "<pre>");
                             }
