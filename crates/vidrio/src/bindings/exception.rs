@@ -88,6 +88,8 @@ fn message(e: DomException) -> &'static str {
         }
         DomException::AbortError => "The operation was aborted.",
         DomException::TimeoutError => "The operation timed out.",
+        DomException::SecurityError => "The operation is insecure.",
+        DomException::DataCloneError => "The object can not be cloned.",
     }
 }
 

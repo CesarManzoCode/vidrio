@@ -134,7 +134,7 @@ pub fn install_window(agent: &mut Agent, state: &Rc<RealmState>) {
         ObjectKind::Host(Rc::new(PlatformObject::new(window, realm, Native::Window))),
     );
     state.global.set(Some(global));
-    agent.set_realm_global_object(realm, Some(global), None);
+    agent.set_realm_global_object(realm, Some(global), state.html.proxy.get());
     if agent.set_default_global_bindings(realm).is_err() {
         panic!("the global object refused the default bindings");
     }

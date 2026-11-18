@@ -219,6 +219,17 @@ impl<'a> JsHost<'a> {
         })
     }
 
+    /// A host for algorithms on `doc` that run script in the realm of
+    /// `state` (tasks of the event loop run with no current realm).
+    pub fn with_state(agent: &'a mut Agent, doc: DocRef, state: Rc<RealmState>) -> JsHost<'a> {
+        JsHost {
+            agent,
+            doc,
+            state,
+            lent: None,
+        }
+    }
+
     /// Puts a lent listener list back.
     fn give_back(&mut self) {
         if let Some((target, list)) = self.lent.take() {
@@ -249,11 +260,7 @@ impl<'a> JsHost<'a> {
                 let doc = self.doc.clone();
                 Value::Object(signal_wrapper(self.agent, &self.state, &doc, s))
             }
-            Target::Window => self
-                .state
-                .global
-                .get()
-                .map_or(Value::Undefined, Value::Object),
+            Target::Window => crate::browser::window::proxy_of(&self.state),
             Target::Other(id) => self
                 .state
                 .targets
@@ -299,7 +306,8 @@ impl DomHost for JsHost<'_> {
     fn report_exception(&mut self, exception: HostRef) {
         self.give_back();
         let v = host_value(self.agent, exception);
-        self.state.report(v);
+        let state = self.state.clone();
+        crate::browser::errors::report_exception(self.agent, &state, v);
     }
 
     fn call_mutation_observer(
@@ -351,7 +359,7 @@ impl DomHost for JsHost<'_> {
     }
 
     fn now(&mut self) -> f64 {
-        self.state.time_origin.elapsed().as_secs_f64() * 1000.0
+        crate::browser::window::window_now(&self.state)
     }
 
     fn document_parent(&mut self, _event: &Event) -> Option<Target> {

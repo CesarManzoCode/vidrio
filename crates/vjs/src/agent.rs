@@ -161,6 +161,18 @@ pub enum ErrorKind {
     Uri,
 }
 
+/// The operation HostPromiseRejectionTracker reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RejectionOperation {
+    /// A promise was rejected with no handler.
+    Reject,
+    /// A handler was added to a rejected promise that had none.
+    Handle,
+}
+
+/// HostPromiseRejectionTracker(promise, operation) (ECMA-262 §27.2.1.9).
+pub type RejectionTracker = fn(&mut Agent, Object, RejectionOperation);
+
 /// Nested native calls deeper than this throw a RangeError.
 pub const MAX_NATIVE_CALL_DEPTH: usize = 1500;
 
@@ -190,6 +202,8 @@ pub struct Agent {
     pub can_block: bool,
     /// The pending promises of `Atomics.waitAsync`.
     pub(crate) async_waits: crate::waiter::AsyncWaits,
+    /// The host's HostPromiseRejectionTracker; `None` does nothing.
+    pub promise_rejection_tracker: Option<RejectionTracker>,
 }
 
 impl Default for Agent {
@@ -250,6 +264,7 @@ impl Agent {
             modules: crate::module::ModuleState::default(),
             can_block: true,
             async_waits: crate::waiter::AsyncWaits::new(),
+            promise_rejection_tracker: None,
         }
     }
 
@@ -265,6 +280,12 @@ impl Agent {
 
     pub fn running_context(&self) -> Option<&ExecutionContext> {
         self.contexts.last()
+    }
+
+    /// The execution context stack, oldest first (hosts look for their
+    /// incumbent script in it).
+    pub fn execution_contexts(&self) -> &[ExecutionContext] {
+        &self.contexts
     }
 
     /// GetActiveScriptOrModule: the Script or Module Record of the topmost

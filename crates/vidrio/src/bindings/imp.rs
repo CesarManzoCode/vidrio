@@ -64,13 +64,19 @@ type R = JsResult<IdlValue>;
 pub fn call(agent: &mut Agent, inv: &mut Invocation) -> R {
     let state = current_state(agent)?;
     let this_doc = with_this(inv, |n| n.document().cloned());
-    let result = run(agent, &state, inv);
+    // The members of HTML (k3-10) live with the user agent.
+    let result = match crate::browser::members::call(agent, &state, inv) {
+        Some(r) => r,
+        None => run(agent, &state, inv),
+    };
     if let Some(doc) = &this_doc {
         queue_observer_microtask(agent, doc);
+        crate::browser::document::process_html_changes(agent, doc);
     }
     if let Some(doc) = state.document() {
         if !this_doc.as_ref().is_some_and(|d| Rc::ptr_eq(d, &doc)) {
             queue_observer_microtask(agent, &doc);
+            crate::browser::document::process_html_changes(agent, &doc);
         }
     }
     result
@@ -371,6 +377,25 @@ fn construct_event(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) 
     let ev = e.into_ref();
     let o = platform::create(agent, state, inv.iface, Native::Event(ev.clone()), proto);
     register_event_wrapper(agent, state, &ev, o);
+    // The other members of the init dictionary (`MessageEventInit.data`,
+    // `ErrorEventInit.message`, …) are kept on the wrapper, where the
+    // getters of `crate::browser::members` read them.
+    if let Some(d) = dict {
+        for (name, v) in &d.members {
+            if matches!(*name, "bubbles" | "cancelable" | "composed" | "detail") {
+                continue;
+            }
+            let value = super::convert::to_js_any(agent, v)?;
+            if *name == "ports" {
+                if let Value::Object(a) = value {
+                    vjs::ops::set_integrity_level(agent, a, vjs::ops::IntegrityLevel::Frozen)?;
+                }
+            }
+            if let Some(p) = platform::platform_ref(agent, Value::Object(o)) {
+                p.get().set_slot(name, value);
+            }
+        }
+    }
     Ok(IdlValue::Object(o))
 }
 

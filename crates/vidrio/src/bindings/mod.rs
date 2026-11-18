@@ -108,6 +108,8 @@ pub struct RealmState {
     /// `AbortSignal.timeout` timers waiting for the event loop: document,
     /// signal and milliseconds.
     pub timeouts: RefCell<Vec<(DocRef, crate::dom::abort::SignalId, u64)>>,
+    /// What the HTML user agent keeps per `Window` (k3-10).
+    pub html: crate::browser::window::WindowData,
 }
 
 /// The number of reported exceptions a realm keeps.
@@ -140,6 +142,7 @@ impl Trace for RealmState {
         if let Some(e) = self.current_event.get() {
             tracer.object(e);
         }
+        self.html.trace(tracer);
     }
 }
 
@@ -165,6 +168,7 @@ impl RealmState {
             current_event: Cell::new(None),
             time_origin: std::time::Instant::now(),
             timeouts: RefCell::new(Vec::new()),
+            html: crate::browser::window::WindowData::default(),
         }
     }
 
@@ -266,8 +270,27 @@ pub fn host_value(agent: &Agent, r: HostRef) -> Value {
 /// active: its node→wrapper table is a root until
 /// [`discard_document`].
 pub fn create_window_realm(agent: &mut Agent, document: DocRef, options: WindowOptions) -> Realm {
+    create_window_realm_with(agent, document, options, None, None)
+}
+
+/// [`create_window_realm`] for the `Window` of a browsing context: the
+/// realm's `[[GlobalThisValue]]` is the context's `WindowProxy` `proxy`,
+/// and the document records the tree changes the HTML user agent reacts
+/// to ([`crate::dom::HtmlChange`]).
+pub fn create_window_realm_with(
+    agent: &mut Agent,
+    document: DocRef,
+    options: WindowOptions,
+    proxy: Option<Object>,
+    context: Option<crate::browser::ContextId>,
+) -> Realm {
     let realm = agent.create_realm();
     let state = Rc::new(RealmState::new(realm, options));
+    state.html.proxy.set(proxy);
+    state.html.context.set(context);
+    if context.is_some() {
+        document.borrow_mut().html_tracking = true;
+    }
     STATES.with(|s| {
         let mut s = s.borrow_mut();
         s.retain(|w| w.strong_count() > 0);

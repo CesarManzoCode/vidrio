@@ -16,7 +16,9 @@ use super::observer::RecordType;
 use super::range::BoundaryPoint;
 use super::shadow::{ShadowRootData, SlotAssignmentMode};
 use super::tree::{utf16_len, utf16_substring};
-use super::{Atom, AttrData, Attribute, Document, DomException, Namespace, NodeData, NodeId};
+use super::{
+    Atom, AttrData, Attribute, Document, DomException, HtmlChange, Namespace, NodeData, NodeId,
+};
 
 /// A `(Node or DOMString)` argument of the mixin methods.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,6 +255,11 @@ impl Document {
             }
             self.attach(n, parent, child);
         }
+        if self.html_tracking {
+            for &n in &nodes {
+                self.html_changes.push(HtmlChange::Inserted(n));
+            }
+        }
         if !suppress_observers && self.has_registered_observers() {
             self.queue_tree_mutation_record(parent, nodes, Vec::new(), previous_sibling, child);
         }
@@ -407,6 +414,9 @@ impl Document {
             return;
         };
         let (previous, next) = self.detach(node, parent);
+        if self.html_tracking {
+            self.html_changes.push(HtmlChange::Removed(parent));
+        }
         self.add_transient_observers(parent, node);
         if !suppress_observers && self.has_registered_observers() {
             self.queue_tree_mutation_record(parent, Vec::new(), vec![node], previous, next);
@@ -1014,6 +1024,10 @@ impl Document {
         old: Option<&str>,
         value: Option<&str>,
     ) {
+        if self.html_tracking && ns.is_none() {
+            self.html_changes
+                .push(HtmlChange::Attribute(element, local));
+        }
         self.queue_mutation_record(
             RecordType::Attributes,
             element,
@@ -1741,5 +1755,26 @@ mod tests {
         assert_eq!(doc.text_content(b).as_deref(), Some("xy"));
         doc.move_before(body, a, None).expect("move");
         assert_eq!(doc.last_child(body), Some(a));
+    }
+
+    #[test]
+    fn html_changes_are_recorded_only_when_tracking() {
+        let (mut doc, body) = doc_with_body();
+        let a = doc.create_html_element("script");
+        doc.append_child(body, a);
+        assert!(doc.html_changes.is_empty());
+        doc.html_tracking = true;
+        let b = doc.create_html_element("iframe");
+        doc.append_child(body, b);
+        doc.set_attribute(b, "src", "x.html");
+        doc.remove(a);
+        assert_eq!(
+            doc.html_changes,
+            vec![
+                HtmlChange::Inserted(b),
+                HtmlChange::Attribute(b, Atom::new("src")),
+                HtmlChange::Removed(body),
+            ]
+        );
     }
 }

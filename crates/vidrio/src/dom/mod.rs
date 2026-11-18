@@ -368,6 +368,22 @@ pub mod node_type {
     pub const DOCUMENT_FRAGMENT: u16 = 11;
 }
 
+/// A change of the tree that has HTML steps (the insertion steps of
+/// `script` and `iframe`, their removal, attribute change steps such as
+/// event handler content attributes). The DOM records them only when
+/// [`Document::html_tracking`] is set; the user agent of
+/// `crate::browser` runs the steps after the DOM algorithm returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HtmlChange {
+    /// `node` was inserted (with its subtree).
+    Inserted(NodeId),
+    /// A child was removed from `parent`.
+    Removed(NodeId),
+    /// An attribute without namespace of `element` was set, changed or
+    /// removed.
+    Attribute(NodeId, Atom),
+}
+
 /// The shared handle to a document (vault/CONTRACT.md §3.3). Algorithms
 /// that call into script borrow it only between calls.
 pub type DocRef = Rc<RefCell<Document>>;
@@ -399,6 +415,9 @@ pub struct Document {
     pub is_srcdoc: bool,
     /// The parser cannot change the mode flag (HTML §13.2.6.4.1).
     pub parser_cannot_change_mode: bool,
+    /// Record [`HtmlChange`]s in `html_changes`.
+    pub html_tracking: bool,
+    pub html_changes: Vec<HtmlChange>,
 }
 
 fn about_blank() -> Url {
@@ -419,6 +438,8 @@ impl Document {
             kind,
             is_srcdoc: false,
             parser_cannot_change_mode: false,
+            html_tracking: false,
+            html_changes: Vec::new(),
             ranges: Vec::new(),
             iterators: Vec::new(),
             observers: observer::ObserverState::default(),
@@ -472,6 +493,11 @@ impl Document {
         let mut data = ElementData::new(name);
         if name.ns == Some(Namespace::Html) && is_valid_custom_element_name(&name.local) {
             data.custom_state = CustomElementState::Undefined;
+        }
+        // A `script` element starts with its force async flag set; the
+        // parser clears it for the scripts it inserts (HTML §4.12.1).
+        if name.ns == Some(Namespace::Html) && name.local == "script" {
+            data.script.force_async = true;
         }
         let id = self.push(NodeData::Element(data));
         if name.ns == Some(Namespace::Html) && name.local == "template" {

@@ -238,7 +238,8 @@ impl PlatformRef {
     }
 }
 
-/// The platform object `v` is, if it is one.
+/// The platform object `v` is, if it is one. A `WindowProxy` stands for
+/// its browsing context's active `Window`.
 pub fn platform_ref(agent: &Agent, v: Value) -> Option<PlatformRef> {
     let Value::Object(o) = v else {
         return None;
@@ -248,6 +249,16 @@ pub fn platform_ref(agent: &Agent, v: Value) -> Option<PlatformRef> {
             object: o,
             host: h.clone(),
         }),
+        ObjectKind::Host(h) if h.as_any().is::<crate::browser::window::WindowProxy>() => {
+            let w = crate::browser::window::proxy_target(agent, o)?;
+            match &agent.heap.object(w).kind {
+                ObjectKind::Host(h) if h.as_any().is::<PlatformObject>() => Some(PlatformRef {
+                    object: w,
+                    host: h.clone(),
+                }),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }

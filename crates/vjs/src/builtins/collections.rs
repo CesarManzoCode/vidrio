@@ -226,6 +226,33 @@ impl MapData {
     }
 }
 
+/// The live entries of a `Map` or `Set` (`[[MapData]]`/`[[SetData]]`, in
+/// order), for hosts that walk them (structured clone); `None` for other
+/// objects.
+pub fn collection_entries(agent: &Agent, o: Object) -> Option<Vec<(Value, Value)>> {
+    match &agent.heap.object(o).kind {
+        ObjectKind::Map(d) | ObjectKind::Set(d) => Some(d.live()),
+        _ => None,
+    }
+}
+
+/// Appends `key` and `value` to the data of a `Map` or `Set` (for a `Set`
+/// the value is ignored) without calling any method of the object, as a
+/// host deserializing a collection does.
+pub fn collection_append(agent: &mut Agent, o: Object, key: Value, value: Value) {
+    let key = canonicalize(key);
+    let k = map_key(agent, key);
+    match &mut agent.heap.object_mut(o).kind {
+        ObjectKind::Map(d) => {
+            d.set(k, key, value);
+        }
+        ObjectKind::Set(d) => {
+            d.set(k, key, Value::Undefined);
+        }
+        _ => {}
+    }
+}
+
 impl Trace for MapData {
     fn trace(&self, tracer: &mut Tracer) {
         for (k, v) in self.entries.iter().flatten() {
@@ -1072,6 +1099,29 @@ mod tests {
         d.set(k, v, Value::Undefined);
         assert_eq!(c.next(&d).map(|e| e.0), Some(Value::Number(100.0)));
         assert_eq!(c.next(&d), None);
+    }
+
+    #[test]
+    fn hosts_append_and_read_entries() {
+        let mut agent = Agent::new();
+        let realm = agent.create_realm();
+        agent.set_realm_global_object(realm, None, None);
+        agent
+            .set_default_global_bindings(realm)
+            .expect("global bindings");
+        let m = crate::evaluate_script_in(&mut agent, realm, "new Map([[1, 2]])").expect("map");
+        let Value::Object(m) = m else {
+            panic!("a map");
+        };
+        collection_append(&mut agent, m, Value::Number(-0.0), Value::Boolean(true));
+        collection_append(&mut agent, m, Value::Number(1.0), Value::Null);
+        assert_eq!(
+            collection_entries(&agent, m),
+            Some(vec![
+                (Value::Number(1.0), Value::Null),
+                (Value::Number(0.0), Value::Boolean(true)),
+            ])
+        );
     }
 
     #[test]

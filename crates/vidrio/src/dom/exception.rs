@@ -18,6 +18,8 @@ pub enum DomException {
     InvalidNodeTypeError,
     AbortError,
     TimeoutError,
+    SecurityError,
+    DataCloneError,
 }
 
 impl DomException {
@@ -38,6 +40,8 @@ impl DomException {
             DomException::InvalidNodeTypeError => "InvalidNodeTypeError",
             DomException::AbortError => "AbortError",
             DomException::TimeoutError => "TimeoutError",
+            DomException::SecurityError => "SecurityError",
+            DomException::DataCloneError => "DataCloneError",
         }
     }
 
@@ -59,6 +63,8 @@ impl DomException {
             DomException::InvalidNodeTypeError => 24,
             DomException::AbortError => 20,
             DomException::TimeoutError => 23,
+            DomException::SecurityError => 18,
+            DomException::DataCloneError => 25,
         }
     }
 }
@@ -100,6 +106,9 @@ mod tests {
         assert_eq!(DomException::HierarchyRequestError.code(), 3);
         assert_eq!(DomException::AbortError.code(), 20);
         assert_eq!(DomException::TimeoutError.code(), 23);
+        assert_eq!(DomException::SecurityError.code(), 18);
+        assert_eq!(DomException::DataCloneError.code(), 25);
+        assert_eq!(DomException::DataCloneError.name(), "DataCloneError");
         assert_eq!(
             DomError::from(DomException::SyntaxError),
             DomError::Exception(DomException::SyntaxError)

@@ -103,6 +103,14 @@ fn promise_data(agent: &mut Agent, p: Object) -> Option<&mut PromiseData> {
 }
 
 /// The state and result of a promise.
+/// `[[PromiseIsHandled]]` of a promise (false for other objects).
+pub fn promise_is_handled(agent: &Agent, p: Object) -> bool {
+    match &agent.heap.object(p).kind {
+        ObjectKind::Promise(d) => d.is_handled,
+        _ => false,
+    }
+}
+
 pub fn promise_state(agent: &Agent, p: Object) -> Option<(PromiseState, Value)> {
     match &agent.heap.object(p).kind {
         ObjectKind::Promise(d) => Some((d.state, d.result)),
@@ -209,6 +217,12 @@ pub fn reject_promise(agent: &mut Agent, promise: Object, reason: Value) {
     d.fulfill_reactions.clear();
     d.result = reason;
     d.state = PromiseState::Rejected;
+    let handled = d.is_handled;
+    if !handled {
+        if let Some(tracker) = agent.promise_rejection_tracker {
+            tracker(agent, promise, crate::agent::RejectionOperation::Reject);
+        }
+    }
     trigger_reactions(agent, reactions, reason);
 }
 
@@ -398,6 +412,7 @@ pub fn perform_promise_then(
     };
     let state = d.state;
     let result = d.result;
+    let was_handled = d.is_handled;
     d.is_handled = true;
     match state {
         PromiseState::Pending => {
@@ -405,7 +420,14 @@ pub fn perform_promise_then(
             d.reject_reactions.push(reject);
         }
         PromiseState::Fulfilled => enqueue_reaction_job(agent, fulfill, result),
-        PromiseState::Rejected => enqueue_reaction_job(agent, reject, result),
+        PromiseState::Rejected => {
+            if !was_handled {
+                if let Some(tracker) = agent.promise_rejection_tracker {
+                    tracker(agent, promise, crate::agent::RejectionOperation::Handle);
+                }
+            }
+            enqueue_reaction_job(agent, reject, result)
+        }
     }
     capability.map_or(Value::Undefined, |c| c.promise)
 }
@@ -456,4 +478,80 @@ pub(crate) fn promise_then(agent: &mut Agent, call: NativeCall<'_>) -> JsResult<
         call.arg(1),
         Some(cap),
     ))
+}
+
+#[cfg(test)]
+mod rejection_tracker_tests {
+    use crate::agent::{Agent, RejectionOperation};
+    use crate::gc::Object;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static SEEN: RefCell<Vec<RejectionOperation>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn track(_: &mut Agent, _: Object, op: RejectionOperation) {
+        SEEN.with(|s| s.borrow_mut().push(op));
+    }
+
+    #[test]
+    fn rejections_and_late_handlers_reach_the_host() {
+        let mut agent = Agent::new();
+        let realm = agent.create_realm();
+        agent.set_realm_global_object(realm, None, None);
+        agent
+            .set_default_global_bindings(realm)
+            .expect("global bindings");
+        agent.promise_rejection_tracker = Some(track);
+        crate::evaluate_script_in(&mut agent, realm, "var p = Promise.reject(1);")
+            .expect("script runs");
+        assert_eq!(
+            SEEN.with(|s| s.borrow().clone()),
+            [RejectionOperation::Reject]
+        );
+        crate::evaluate_script_in(&mut agent, realm, "p.catch(function () {});")
+            .expect("script runs");
+        // A handled rejection reports nothing.
+        crate::evaluate_script_in(
+            &mut agent,
+            realm,
+            "Promise.reject(2).then(null, function () {});",
+        )
+        .expect("script runs");
+        agent.run_jobs();
+        assert_eq!(
+            SEEN.with(|s| s.borrow().clone()),
+            [
+                RejectionOperation::Reject,
+                RejectionOperation::Handle,
+                RejectionOperation::Reject,
+                RejectionOperation::Handle,
+            ]
+        );
+    }
+
+    #[test]
+    fn handled_flag_is_visible_to_hosts() {
+        let mut agent = Agent::new();
+        let realm = agent.create_realm();
+        agent.set_realm_global_object(realm, None, None);
+        agent
+            .set_default_global_bindings(realm)
+            .expect("global bindings");
+        let p = crate::evaluate_script_in(&mut agent, realm, "Promise.resolve(1)").expect("p");
+        let crate::value::Value::Object(p) = p else {
+            panic!("a promise");
+        };
+        assert!(!super::promise_is_handled(&agent, p));
+        crate::evaluate_script_in(&mut agent, realm, "void 0").expect("runs");
+        super::perform_promise_then(
+            &mut agent,
+            p,
+            crate::value::Value::Undefined,
+            crate::value::Value::Undefined,
+            None,
+        );
+        assert!(super::promise_is_handled(&agent, p));
+        assert_eq!(agent.execution_contexts().len(), 0);
+    }
 }
