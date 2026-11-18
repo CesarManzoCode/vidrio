@@ -11,11 +11,40 @@
 //! `DocumentFragment`, `Element`, `Attr`, `Text`, `CDATASection`,
 //! `Comment` and `ProcessingInstruction`. [`implementation`] holds the
 //! document creation steps of `DOMImplementation` and name validation.
+//!
+//! The algorithms of the DOM standard live in the submodules: [`mutation`]
+//! (insert, remove, replace, adopt, clone, attributes, mixins), [`tree`]
+//! (tree order and node queries), [`range`] (live and static ranges),
+//! [`traversal`] (`NodeIterator`, `TreeWalker`), [`observer`]
+//! (`MutationObserver`), [`collections`] (live collections,
+//! `NamedNodeMap`, `DOMTokenList`), [`shadow`] (shadow roots and slots),
+//! [`events`] (events and their dispatch), [`abort`]
+//! (`AbortController`/`AbortSignal`) and [`query`] (`matches`, `closest`,
+//! `querySelector`). Algorithms that may run script take a [`DocRef`] and
+//! a [`host::DomHost`] so that the document is not borrowed while the
+//! script runs.
 
+pub mod abort;
 mod atom;
+pub mod collections;
+pub mod events;
+pub mod exception;
+pub mod host;
 pub mod implementation;
+pub mod mutation;
+pub mod observer;
+pub mod query;
+pub mod range;
+pub mod shadow;
+pub mod traversal;
+pub mod tree;
 
 pub use atom::Atom;
+pub use exception::{DomError, DomException, HostRef};
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::encoding::Encoding;
 use crate::url::{Origin, Url};
@@ -184,6 +213,55 @@ pub struct ElementData {
     pub script: ScriptFlags,
     /// The form owner the parser associated (HTML §4.10.17.3).
     pub form_owner: Option<NodeId>,
+    /// The element's shadow root, if it is a shadow host.
+    pub shadow_root: Option<NodeId>,
+    /// The custom element state (DOM §4.9).
+    pub custom_state: CustomElementState,
+}
+
+/// An element's custom element state (DOM §4.9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CustomElementState {
+    Undefined,
+    Failed,
+    #[default]
+    Uncustomized,
+    Precustomized,
+    Custom,
+}
+
+/// True if `name` is a valid custom element name (HTML §4.13.3).
+pub fn is_valid_custom_element_name(name: &str) -> bool {
+    const RESERVED: [&str; 8] = [
+        "annotation-xml",
+        "color-profile",
+        "font-face",
+        "font-face-src",
+        "font-face-uri",
+        "font-face-format",
+        "font-face-name",
+        "missing-glyph",
+    ];
+    let mut chars = name.chars();
+    if !chars.next().is_some_and(|c| c.is_ascii_lowercase()) || !name.contains('-') {
+        return false;
+    }
+    let pcen = |c: char| {
+        matches!(c, '-' | '.' | '_' | '0'..='9' | 'a'..='z' | '\u{B7}')
+            || ('\u{C0}'..='\u{D6}').contains(&c)
+            || ('\u{D8}'..='\u{F6}').contains(&c)
+            || ('\u{F8}'..='\u{37D}').contains(&c)
+            || ('\u{37F}'..='\u{1FFF}').contains(&c)
+            || ('\u{200C}'..='\u{200D}').contains(&c)
+            || ('\u{203F}'..='\u{2040}').contains(&c)
+            || ('\u{2070}'..='\u{218F}').contains(&c)
+            || ('\u{2C00}'..='\u{2FEF}').contains(&c)
+            || ('\u{3001}'..='\u{D7FF}').contains(&c)
+            || ('\u{F900}'..='\u{FDCF}').contains(&c)
+            || ('\u{FDF0}'..='\u{FFFD}').contains(&c)
+            || ('\u{10000}'..='\u{EFFFF}').contains(&c)
+    };
+    chars.all(pcen) && !RESERVED.contains(&name)
 }
 
 impl ElementData {
@@ -195,6 +273,8 @@ impl ElementData {
             template_contents: None,
             script: ScriptFlags::default(),
             form_owner: None,
+            shadow_root: None,
+            custom_state: CustomElementState::Uncustomized,
         }
     }
 
@@ -288,10 +368,27 @@ pub mod node_type {
     pub const DOCUMENT_FRAGMENT: u16 = 11;
 }
 
+/// The shared handle to a document (vault/CONTRACT.md §3.3). Algorithms
+/// that call into script borrow it only between calls.
+pub type DocRef = Rc<RefCell<Document>>;
+
 /// A document and the arena of every node whose node document it is.
 #[derive(Clone, Debug)]
 pub struct Document {
     nodes: Vec<Node>,
+    /// Live ranges, by [`range::RangeId`]; `None` once released.
+    pub(crate) ranges: Vec<Option<range::LiveRange>>,
+    /// `NodeIterator`s, by [`traversal::IteratorId`], for their
+    /// pre-removing steps.
+    pub(crate) iterators: Vec<Option<traversal::NodeIterator>>,
+    /// Mutation observers, their registrations and the pending set.
+    pub(crate) observers: observer::ObserverState,
+    /// The event listener list of each node that has listeners.
+    pub(crate) listeners: HashMap<NodeId, Vec<events::ListenerRef>>,
+    /// Shadow roots and slot assignment.
+    pub(crate) shadow: shadow::ShadowState,
+    /// The abort signals of this document's realm.
+    pub(crate) signals: abort::SignalStore,
     pub url: Url,
     pub origin: Origin,
     pub content_type: String,
@@ -322,6 +419,12 @@ impl Document {
             kind,
             is_srcdoc: false,
             parser_cannot_change_mode: false,
+            ranges: Vec::new(),
+            iterators: Vec::new(),
+            observers: observer::ObserverState::default(),
+            listeners: HashMap::new(),
+            shadow: shadow::ShadowState::default(),
+            signals: abort::SignalStore::default(),
         }
     }
 
@@ -361,10 +464,16 @@ impl Document {
 
     // ----- creation -------------------------------------------------------
 
-    /// Creates an element (DOM "create an element" without custom
-    /// elements). An HTML `template` gets its template contents fragment.
+    /// Creates an element (DOM "create an element" without custom element
+    /// definitions: an HTML element with a valid custom element name is
+    /// left "undefined"). An HTML `template` gets its template contents
+    /// fragment.
     pub fn create_element(&mut self, name: QualName) -> NodeId {
-        let id = self.push(NodeData::Element(ElementData::new(name)));
+        let mut data = ElementData::new(name);
+        if name.ns == Some(Namespace::Html) && is_valid_custom_element_name(&name.local) {
+            data.custom_state = CustomElementState::Undefined;
+        }
+        let id = self.push(NodeData::Element(data));
         if name.ns == Some(Namespace::Html) && name.local == "template" {
             let contents = self.push(NodeData::DocumentFragment { host: Some(id) });
             if let NodeData::Element(data) = &mut self.node_mut(id).data {
@@ -684,22 +793,9 @@ impl Document {
         self.element(id)?.attr(local)
     }
 
-    /// Sets (or appends) `id`'s attribute without namespace named `local`.
-    pub fn set_attribute(&mut self, id: NodeId, local: &str, value: &str) {
-        if let Some(e) = self.element_mut(id) {
-            if let Some(a) = e
-                .attrs
-                .iter_mut()
-                .find(|a| a.ns.is_none() && a.local == *local)
-            {
-                a.value = value.to_string();
-            } else {
-                e.attrs.push(Attribute::new(local, value));
-            }
-        }
-    }
-
-    /// Appends an attribute to `id` (DOM "append an attribute").
+    /// Appends an attribute to `id` without mutation records (the parser,
+    /// before the element is inserted; [`Document::set_attribute`] and the
+    /// other attribute algorithms queue records).
     pub fn append_attribute(&mut self, id: NodeId, attr: Attribute) {
         if let Some(e) = self.element_mut(id) {
             e.attrs.push(attr);
@@ -744,9 +840,10 @@ impl Document {
 
     // ----- tree mutation ---------------------------------------------------
 
-    /// Detaches `child` from its parent, if any (the tree part of DOM
-    /// "remove", without mutation records or live range updates).
-    pub fn remove(&mut self, child: NodeId) {
+    /// Detaches `child` from its parent, if any: only the links, without
+    /// mutation records or live range updates ([`Document::remove`] is the
+    /// DOM algorithm).
+    pub(crate) fn tree_remove(&mut self, child: NodeId) {
         let Some(parent) = self.parent(child) else {
             return;
         };
@@ -766,24 +863,11 @@ impl Document {
         node.next_sibling = None;
     }
 
-    /// Inserts `child` into `parent` before `reference` (or last), first
-    /// removing it from its old parent (the tree part of DOM "insert"; a
-    /// fragment `child` inserts its children). The caller checks validity.
-    pub fn insert_before(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
-        if matches!(self.node(child).data, NodeData::DocumentFragment { .. }) {
-            let kids: Vec<NodeId> = self.children(child).collect();
-            for kid in kids {
-                self.insert_before(parent, kid, reference);
-            }
-            return;
-        }
-        // Inserting a node before itself leaves it where it is.
-        let reference = if reference == Some(child) {
-            self.next_sibling(child)
-        } else {
-            reference
-        };
-        self.remove(child);
+    /// Links the parentless `child` into `parent` before `reference` (or
+    /// last): only the links ([`Document::insert_before`] is the DOM
+    /// algorithm).
+    pub(crate) fn tree_insert(&mut self, parent: NodeId, child: NodeId, reference: Option<NodeId>) {
+        debug_assert!(self.parent(child).is_none());
         let prev = match reference {
             Some(r) => self.prev_sibling(r),
             None => self.last_child(parent),
@@ -802,11 +886,6 @@ impl Document {
             Some(r) => self.node_mut(r).prev_sibling = Some(child),
             None => self.node_mut(parent).last_child = Some(child),
         }
-    }
-
-    /// Appends `child` as the last child of `parent`.
-    pub fn append_child(&mut self, parent: NodeId, child: NodeId) {
-        self.insert_before(parent, child, None);
     }
 
     /// Moves every child of `from` to the end of `to`, in order.

@@ -4,22 +4,7 @@
 use super::{Atom, Doctype, Document, DocumentKind, Namespace, NodeId, QualName};
 use crate::url::Origin;
 
-/// The `DOMException` names these steps throw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DomException {
-    InvalidCharacterError,
-    NamespaceError,
-}
-
-impl DomException {
-    /// The exception's name.
-    pub fn name(self) -> &'static str {
-        match self {
-            DomException::InvalidCharacterError => "InvalidCharacterError",
-            DomException::NamespaceError => "NamespaceError",
-        }
-    }
-}
+pub use super::exception::DomException;
 
 /// Which local name rule "validate and extract" applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
