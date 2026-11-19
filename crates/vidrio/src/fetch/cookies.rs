@@ -69,6 +69,40 @@ fn expires_year(value: &str) -> Option<i32> {
 }
 
 impl CookieJar {
+    /// The unexpired cookies that a request to `url` would send, longest
+    /// paths first (WebDriver "Get All Cookies").
+    pub fn matching(&mut self, url: &Url) -> Vec<Cookie> {
+        let Some(host) = host_of(url) else {
+            return Vec::new();
+        };
+        let now = Instant::now();
+        self.cookies.retain(|c| c.expires.is_none_or(|e| e > now));
+        let path = url.path_string();
+        let mut out: Vec<Cookie> = self
+            .cookies
+            .iter()
+            .filter(|c| {
+                (if c.host_only {
+                    c.domain == host
+                } else {
+                    domain_matches(&host, &c.domain)
+                }) && path_matches(&path, &c.path)
+                    && (!c.secure || url.scheme == "https")
+            })
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+        out
+    }
+
+    /// Deletes the cookies that [`CookieJar::matching`] returns for
+    /// `url`; how many went.
+    pub fn delete_matching(&mut self, url: &Url) -> usize {
+        let gone = self.matching(url);
+        self.cookies.retain(|c| !gone.contains(c));
+        gone.len()
+    }
+
     /// Stores the cookie of a `Set-Cookie` header received from `url`.
     pub fn set_from_header(&mut self, url: &Url, header: &str) {
         let Some(host) = host_of(url) else {
@@ -201,5 +235,28 @@ mod tests {
         assert_eq!(jar.header_for(&url("http://other.test/")), None);
         jar.set_from_header(&url("http://www.a.test/"), "d=; Domain=a.test; Max-Age=0");
         assert_eq!(jar.header_for(&url("http://a.test/")), None);
+    }
+
+    #[test]
+    fn matching_cookies_can_be_listed_and_deleted() {
+        let mut jar = CookieJar::default();
+        jar.set_from_header(&url("http://a.test/"), "s=1");
+        jar.set_from_header(&url("http://a.test/"), "p=2; Path=/x");
+        jar.set_from_header(&url("http://other.test/"), "o=3");
+        let names: Vec<String> = jar
+            .matching(&url("http://a.test/x/y"))
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(names, ["p", "s"]);
+        assert_eq!(jar.delete_matching(&url("http://a.test/")), 1);
+        assert_eq!(
+            jar.header_for(&url("http://a.test/x/y")).as_deref(),
+            Some("p=2")
+        );
+        assert_eq!(
+            jar.header_for(&url("http://other.test/")).as_deref(),
+            Some("o=3")
+        );
     }
 }
