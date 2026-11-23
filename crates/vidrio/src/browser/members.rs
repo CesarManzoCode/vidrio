@@ -8,7 +8,8 @@
 //! `performance`), animation frames, dialogs without a user interface,
 //! `console`, `Location`, `History`, `Navigator`, `Performance`, the
 //! dynamic markup insertion and lifecycle members of `Document`,
-//! `HTMLScriptElement`, `HTMLIFrameElement`, `dataset` and its
+//! `HTMLScriptElement`, `HTMLIFrameElement`, the hyperlink, `base`, form
+//! and input members of [`super::hyperlink`] and [`super::forms`], `dataset` and its
 //! `DOMStringMap`, `MessageChannel`,
 //! `MessagePort`, the attributes of the HTML event interfaces and every
 //! event handler IDL attribute.
@@ -60,6 +61,12 @@ pub fn call(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> Opti
         "HTMLScriptElement" => script_element(agent, inv, member),
         "HTMLIFrameElement" => iframe_element(agent, inv, member),
         "HTMLMetaElement" => meta_element(agent, inv, member),
+        "HTMLHyperlinkElementUtils" | "HyperlinkElementUtils" => {
+            super::hyperlink::hyperlink(agent, inv, member)
+        }
+        "HTMLBaseElement" => super::hyperlink::base_element(agent, inv, member),
+        "HTMLFormElement" => super::forms::form_element(agent, inv, member),
+        "HTMLInputElement" => super::forms::input_element(agent, inv, member),
         "HTMLOrSVGOrMathMLElement" if member == "get_dataset" => {
             let (doc, element) = this_node(inv)?;
             let iface = interface_by_name("DOMStringMap")?;

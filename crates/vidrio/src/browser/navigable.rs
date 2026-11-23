@@ -360,6 +360,9 @@ pub struct NavigateParams {
     pub srcdoc: Option<String>,
     /// The origin of the document that started the navigation.
     pub source_origin: Option<Origin>,
+    /// The method, headers and body when the navigation does not `GET`
+    /// (a form submitted as an entity body).
+    pub request: Option<super::loader::NetRequest>,
 }
 
 impl NavigateParams {
@@ -369,6 +372,7 @@ impl NavigateParams {
             replace: false,
             srcdoc: None,
             source_origin: None,
+            request: None,
         }
     }
 }
@@ -408,7 +412,7 @@ pub fn navigate(agent: &mut Agent, id: ContextId, params: NavigateParams) {
             .as_ref()
             .and_then(|d| ua.doc_info(d))
             .is_some_and(|i| i.is_initial_about_blank.get() || !i.completely_loaded.get());
-    if params.srcdoc.is_none() && url.fragment.is_some() {
+    if params.srcdoc.is_none() && params.request.is_none() && url.fragment.is_some() {
         if let Some(doc) = &current {
             let same = equal_except_fragment(&doc.borrow().url, &url);
             if same {
@@ -441,6 +445,7 @@ pub fn navigate(agent: &mut Agent, id: ContextId, params: NavigateParams) {
         url,
         replace,
         srcdoc: params.srcdoc,
+        request: params.request,
     };
     super::loader::start_navigation(agent, &ua, request);
 }
@@ -846,30 +851,10 @@ pub fn window_open(
         .collect();
     let noopener = tokens.iter().any(|t| t == "noopener" || t == "noreferrer");
     let target_lower = target.to_ascii_lowercase();
-    let chosen: Option<Rc<BrowsingContext>> = match target_lower.as_str() {
-        "" | "_blank" => None,
-        "_self" => ua.context(source),
-        "_parent" => ua
-            .context(source)
-            .and_then(|c| c.parent.and_then(|p| ua.context(p)))
-            .or_else(|| ua.context(source)),
-        "_top" => {
-            let mut c = ua.context(source);
-            while let Some(p) = c
-                .as_ref()
-                .and_then(|x| x.parent)
-                .and_then(|p| ua.context(p))
-            {
-                c = Some(p);
-            }
-            c
-        }
-        _ => ua
-            .contexts
-            .borrow()
-            .iter()
-            .find(|c| !c.discarded.get() && *c.name.borrow() == target)
-            .cloned(),
+    let chosen = if target.is_empty() {
+        None
+    } else {
+        context_for_target(&ua, source, target)
     };
     let (ctx, new) = match chosen {
         Some(c) => (c, false),
@@ -893,6 +878,43 @@ pub fn window_open(
         return Ok(Value::Null);
     }
     Ok(Value::Object(ctx.proxy))
+}
+
+/// The browsing context a link, form or `window.open` with target name
+/// `target` picks from `source` ("the rules for choosing a navigable",
+/// without creating one): `""` and `_self` are `source`, `_parent` and
+/// `_top` its ancestors, `_blank` none, any other name the context with
+/// that name.
+pub fn context_for_target(
+    ua: &UserAgent,
+    source: ContextId,
+    target: &str,
+) -> Option<Rc<BrowsingContext>> {
+    match target.to_ascii_lowercase().as_str() {
+        "" | "_self" => ua.context(source),
+        "_blank" => None,
+        "_parent" => ua
+            .context(source)
+            .and_then(|c| c.parent.and_then(|p| ua.context(p)))
+            .or_else(|| ua.context(source)),
+        "_top" => {
+            let mut c = ua.context(source);
+            while let Some(p) = c
+                .as_ref()
+                .and_then(|x| x.parent)
+                .and_then(|p| ua.context(p))
+            {
+                c = Some(p);
+            }
+            c
+        }
+        _ => ua
+            .contexts
+            .borrow()
+            .iter()
+            .find(|c| !c.discarded.get() && *c.name.borrow() == target)
+            .cloned(),
+    }
 }
 
 /// Applies a session history traversal of `delta` steps to context `id`
@@ -960,6 +982,7 @@ pub fn traverse_history(agent: &mut Agent, id: ContextId, delta: i64) {
                     url: p.url,
                     replace: true,
                     srcdoc: None,
+                    request: None,
                 },
             );
             return;

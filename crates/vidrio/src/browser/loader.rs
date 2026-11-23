@@ -823,6 +823,9 @@ pub struct NavigationRequest {
     pub url: Url,
     pub replace: bool,
     pub srcdoc: Option<String>,
+    /// The method, headers and body of a navigation that does not `GET`
+    /// (a form submitted as an entity body).
+    pub request: Option<NetRequest>,
 }
 
 /// How a response body becomes the parser's input.
@@ -1010,6 +1013,7 @@ pub fn start_navigation(_agent: &mut Agent, ua: &UserAgent, request: NavigationR
         url,
         replace,
         srcdoc,
+        request,
     } = request;
     if let Some(text) = srcdoc {
         queue_task(TaskSource::Navigation, None, move |agent| {
@@ -1059,78 +1063,77 @@ pub fn start_navigation(_agent: &mut Agent, ua: &UserAgent, request: NavigationR
         cancelled: false,
     };
     let fallback_url = url.clone();
-    fetch_streaming(
-        ua,
-        url,
-        None,
-        Box::new(move |agent, event| {
-            if load.cancelled {
-                return;
+    let callback: Box<dyn FnMut(&mut Agent, FetchEvent)> = Box::new(move |agent, event| {
+        if load.cancelled {
+            return;
+        }
+        let Some(ua) = super::ua() else {
+            return;
+        };
+        match event {
+            FetchEvent::Head(head) => {
+                if !still_ongoing(&ua, load.context, load.navigation) {
+                    load.cancelled = true;
+                    return;
+                }
+                let (kind, essence) = body_kind(head.content_type.as_deref());
+                load.kind = kind;
+                load.content_type = head.content_type.clone();
+                match create_document(
+                    agent,
+                    &ua,
+                    load.context,
+                    &head.url,
+                    &essence,
+                    load.replace,
+                    false,
+                ) {
+                    Some((doc, generation)) => {
+                        if kind == BodyKind::Xml {
+                            doc.borrow_mut().kind = crate::dom::DocumentKind::Xml;
+                        }
+                        if kind == BodyKind::Text {
+                            document::feed_parser(agent, &doc, generation, "<pre>");
+                        }
+                        load.doc = Some(doc);
+                        load.generation = generation;
+                    }
+                    None => load.cancelled = true,
+                }
             }
-            let Some(ua) = super::ua() else {
-                return;
-            };
-            match event {
-                FetchEvent::Head(head) => {
+            FetchEvent::Data(bytes) => {
+                load.buffered.extend_from_slice(&bytes);
+                load.pump(agent, false);
+            }
+            FetchEvent::Done => load.pump(agent, true),
+            FetchEvent::Failed(_) => {
+                if load.doc.is_none() {
+                    // A network error: an empty document in its place.
                     if !still_ongoing(&ua, load.context, load.navigation) {
-                        load.cancelled = true;
                         return;
                     }
-                    let (kind, essence) = body_kind(head.content_type.as_deref());
-                    load.kind = kind;
-                    load.content_type = head.content_type.clone();
-                    match create_document(
+                    if let Some((doc, generation)) = create_document(
                         agent,
                         &ua,
                         load.context,
-                        &head.url,
-                        &essence,
+                        &fallback_url,
+                        "text/html",
                         load.replace,
                         false,
                     ) {
-                        Some((doc, generation)) => {
-                            if kind == BodyKind::Xml {
-                                doc.borrow_mut().kind = crate::dom::DocumentKind::Xml;
-                            }
-                            if kind == BodyKind::Text {
-                                document::feed_parser(agent, &doc, generation, "<pre>");
-                            }
-                            load.doc = Some(doc);
-                            load.generation = generation;
-                        }
-                        None => load.cancelled = true,
+                        load.doc = Some(doc);
+                        load.generation = generation;
+                        load.kind = BodyKind::Empty;
                     }
                 }
-                FetchEvent::Data(bytes) => {
-                    load.buffered.extend_from_slice(&bytes);
-                    load.pump(agent, false);
-                }
-                FetchEvent::Done => load.pump(agent, true),
-                FetchEvent::Failed(_) => {
-                    if load.doc.is_none() {
-                        // A network error: an empty document in its place.
-                        if !still_ongoing(&ua, load.context, load.navigation) {
-                            return;
-                        }
-                        if let Some((doc, generation)) = create_document(
-                            agent,
-                            &ua,
-                            load.context,
-                            &fallback_url,
-                            "text/html",
-                            load.replace,
-                            false,
-                        ) {
-                            load.doc = Some(doc);
-                            load.generation = generation;
-                            load.kind = BodyKind::Empty;
-                        }
-                    }
-                    load.pump(agent, true);
-                }
+                load.pump(agent, true);
             }
-        }),
-    );
+        }
+    });
+    match request {
+        Some(request) => fetch_request(ua, url, request, None, callback),
+        None => fetch_streaming(ua, url, None, callback),
+    };
 }
 
 #[cfg(test)]

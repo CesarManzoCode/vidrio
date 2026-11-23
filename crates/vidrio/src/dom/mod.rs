@@ -217,6 +217,9 @@ pub struct ElementData {
     pub shadow_root: Option<NodeId>,
     /// The custom element state (DOM §4.9).
     pub custom_state: CustomElementState,
+    /// The value of an `input` or `textarea` once its dirty value flag is
+    /// set (HTML §4.10.5.4); `None` while it follows its default value.
+    pub control_value: Option<String>,
 }
 
 /// An element's custom element state (DOM §4.9).
@@ -275,6 +278,7 @@ impl ElementData {
             form_owner: None,
             shadow_root: None,
             custom_state: CustomElementState::Uncustomized,
+            control_value: None,
         }
     }
 

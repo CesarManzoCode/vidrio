@@ -718,6 +718,9 @@ impl Document {
                     // HTML's cloning steps for `script` copy "already
                     // started".
                     el.script.already_started = e.script.already_started;
+                    // Those of `input` and `textarea` copy the value and
+                    // its dirty value flag.
+                    el.control_value = e.control_value.clone();
                     if adopt {
                         el.script = e.script;
                         el.custom_state = e.custom_state;

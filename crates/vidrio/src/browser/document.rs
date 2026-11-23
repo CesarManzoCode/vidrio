@@ -109,6 +109,9 @@ pub struct DocInfo {
     pub cookie: RefCell<String>,
     /// `document.lastModified`.
     pub last_modified: RefCell<String>,
+    /// The planned navigation of each form that submitted (HTML
+    /// §4.10.21.3): the form and the plan its queued task carries.
+    pub planned_navigations: RefCell<Vec<(NodeId, u64)>>,
 }
 
 impl DocInfo {
@@ -144,6 +147,7 @@ impl DocInfo {
             referrer: RefCell::new(String::new()),
             cookie: RefCell::new(String::new()),
             last_modified: RefCell::new(last_modified_now()),
+            planned_navigations: RefCell::new(Vec::new()),
         }
     }
 
