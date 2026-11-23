@@ -232,6 +232,12 @@ fn browser() -> Browser {
     })
 }
 
+/// The condition for "the document of `url` has loaded": the initial
+/// `about:blank` is already complete before the navigation replaces it.
+fn loaded(url: &str) -> String {
+    format!("location.href == '{url}' && document.readyState == 'complete'")
+}
+
 /// Runs the event loop of `b` until `condition` (a script evaluated in the
 /// active window of `id`) is true, for at most 20 s.
 fn wait_for(b: &mut Browser, id: ContextId, condition: &str) -> bool {
@@ -247,14 +253,10 @@ fn wait_for(b: &mut Browser, id: ContextId, condition: &str) -> bool {
 
 /// A browser with the page of `origin` loaded.
 fn open_page(origin: &str) -> (Browser, ContextId) {
+    let url = format!("{origin}/page.html");
     let mut b = browser();
-    let id = b
-        .open(&format!("{origin}/page.html"))
-        .expect("the page URL");
-    assert!(
-        wait_for(&mut b, id, "document.readyState == 'complete'"),
-        "the page loads"
-    );
+    let id = b.open(&url).expect("the page URL");
+    assert!(wait_for(&mut b, id, &loaded(&url)), "the page loads");
     (b, id)
 }
 
@@ -577,11 +579,10 @@ fn xml_parsing_and_serialization_with_namespaces() {
 
     // An XHTML document from the network: the XML parser builds it and its
     // script runs.
+    let xhtml_url = format!("{origin}/doc.xhtml");
     let mut b2 = browser();
-    let id2 = b2
-        .open(&format!("{origin}/doc.xhtml"))
-        .expect("the XHTML URL");
-    assert!(wait_for(&mut b2, id2, "document.readyState == 'complete'"));
+    let id2 = b2.open(&xhtml_url).expect("the XHTML URL");
+    assert!(wait_for(&mut b2, id2, &loaded(&xhtml_url)));
     let xhtml = b2.evaluate_to_string(
         id2,
         "[document.contentType, document.documentElement.namespaceURI,

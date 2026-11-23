@@ -467,3 +467,20 @@ fn namespace_objects() {
     assert_eq!(global(&mut r.agent, "tdz"), "ok");
     assert_eq!(global(&mut r.agent, "frozen"), "false");
 }
+
+#[test]
+fn script_records_do_not_keep_a_removed_realm_alive() {
+    // A browser removes the realm of a closed window; the record of a
+    // script that ran there must not hold it (and its objects) forever.
+    let (mut agent, _host, _realm) = setup(&[]);
+    let gone = agent.initialize_host_defined_realm();
+    let record = module::create_script_record(&mut agent, gone, Some(Rc::from("about:blank")));
+    vjs::evaluate_script_record(&mut agent, gone, "var kept = [1, 2, 3];", Some(record)).unwrap();
+    agent.remove_realm(gone);
+    let before = agent.heap.stats().realms;
+    let report = agent
+        .collect_garbage(&[])
+        .expect("no native call is running");
+    assert_eq!(report.freed_realms, 1);
+    assert_eq!(agent.heap.stats().realms, before - 1);
+}

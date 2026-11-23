@@ -104,7 +104,8 @@ fn views_follow_a_resized_buffer() {
       same(dv.byteLength, 0, "a DataView at the end has no bytes");
       throws(RangeError, function () { dv.getUint8(0); }, "DataView index past its end");
       rab.resize(0);
-      throws(TypeError, function () { dv.byteLength; }, "DataView out of bounds");
+      same(dv.byteLength, 0, "an out-of-bounds DataView reports 0");
+      throws(TypeError, function () { dv.getUint8(0); }, "DataView out of bounds");
 
       rab.resize(8);
       same(fixed.length, 4, "fixed view back in bounds");

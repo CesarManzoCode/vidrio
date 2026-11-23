@@ -4,6 +4,38 @@ Cambios y decisiones de vidrio por versión, en términos del producto.
 
 ## [Sin publicar]
 
+### K3 — Red, documento, DOM, bucle de eventos y WebDriver
+
+#### Añadido
+
+- **Red:** cliente HTTP/1.1 con conexiones persistentes, contenido gzip y deflate, y resolución de hosts por `HOST_FILE`. Cliente TLS 1.3 con criptografía propia y validación X.509 contra el almacén del sistema o un certificado dado con `--ca-cert`.
+- **Encoding, URL y MIME:** las 40 codificaciones de WHATWG Encoding, el parser de URL con IDNA y el análisis de tipos MIME.
+- **HTML y DOM:** parser HTML con todos los modos de inserción y `document.write`, serialización de fragmentos, el DOM con sus algoritmos de mutación, eventos, `MutationObserver`, rangos, recorridos, shadow DOM con slots, y los selectores de nivel 4 para `matches`, `closest` y `querySelector`.
+- **Bindings:** generador propio de bindings Web IDL que conecta el DOM con `vjs`, con un wrapper por nodo.
+- **Bucle de eventos:** tareas, microtareas, temporizadores, `requestAnimationFrame`, navegación, `iframe`, `window.open`, scripts clásicos y módulos con import maps, `postMessage` y `MessageChannel`, y clonado estructurado.
+- **APIs de datos:** `fetch` con CORS, redirecciones y cookies, `XMLHttpRequest`, `Blob`, `File`, `FileReader`, `FormData`, URLs `blob:`, `URL`, `TextEncoder`, `TextDecoder`, `DOMParser` y `XMLSerializer` con un parser XML propio.
+- **WebDriver y línea de comandos:** `vidrio --webdriver=PUERTO [--headless] [--ca-cert=RUTA] [URL]` expone el subconjunto WebDriver del contrato. Sin `--webdriver`, carga la URL y sale.
+
+#### Medido
+
+- **test262:** `vjs` pasa 91 956 de 92 012 escenarios (`P` = 0.9994), contra 90 598 de Boa 0.22.0 (`P_boa` = 0.9846). El piso `P ≥ P_boa` se cumple, y ningún escenario que pasaba en K2 falla.
+- **web-platform-tests, directorios de documento:** `R(D)` contra Firefox de 0.3015 en `html/syntax/parsing`, 1.0483 en `html/syntax/serializing-html-fragments`, 0.7040 en `dom`, 0.0104 en `encoding`, 0.5163 en `url`, 0.3562 en `html/semantics/scripting-1` y 0.5841 en `html/webappapis`. Ninguno es cero.
+- **HTTPS, crashtests y test262 en el navegador:** 11 de 25 pruebas `https` terminan en `OK` por el TLS propio, un crashtest da `PASS`, y vidrio pasa 49 455 subtests de `third_party/test262` de WPT.
+- **Memoria:** cada corrida quedó bajo el límite de 10 GiB; el pico más alto fue 4 999 114 752 B, en `encoding`.
+
+#### Corregido
+
+- **vjs:**
+  - Cadenas de Temporal: se rechaza el signo menos U+2212 y se ignoran las anotaciones de calendario donde corresponde.
+  - `caller` en funciones no estrictas, `byteLength` y `byteOffset` de `DataView` fuera de rango, el límite de `Iterator.prototype.take` y `drop`, y `Promise.try`.
+  - Asignaciones dentro de `with` cuyo lado derecho cambia el enlace, y el orden de `super[…]`.
+  - Las referencias de los Script Records ya no mantienen vivo el realm de una ventana cerrada.
+- **vidrio:**
+  - El decodificador conserva la codificación elegida por el BOM al terminar el flujo.
+  - `<meta>` expone sus atributos reflejados.
+  - Los comandos WebDriver ya no esperan al siguiente temporizador de la página.
+  - El módulo de producto del arnés sirve las pruebas en `127.0.0.1`.
+
 ### K2 — Motor JavaScript `vjs` medido con test262
 
 #### Añadido

@@ -629,8 +629,9 @@ fn ecdsa_p256_rfc_6979() {
             "{alg:?} {msg} swapped"
         );
     }
-    // The same signature in DER form.
-    let mut der = vec![0x30, 0x45, 0x02, 0x21, 0x00];
+    // The same signature in DER form: two 35-byte INTEGERs (both r and s
+    // have the top bit set, so each gets a leading zero), 70 = 0x46 bytes.
+    let mut der = vec![0x30, 0x46, 0x02, 0x21, 0x00];
     der.extend(hex(
         "efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716",
     ));
@@ -647,6 +648,14 @@ fn ecdsa_p256_rfc_6979() {
         &q,
         &HashAlg::Sha256.digest(b"test"),
         &der
+    ));
+    // A SEQUENCE length that does not cover its contents is rejected.
+    let mut short = der.clone();
+    short[1] = 0x45;
+    assert!(!p256::verify_der(
+        &q,
+        &HashAlg::Sha256.digest(b"sample"),
+        &short
     ));
 }
 

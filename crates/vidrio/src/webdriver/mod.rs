@@ -221,8 +221,10 @@ pub fn run(browser: &mut Browser, commands: Commands, painter: Rc<dyn Painter>, 
                 std::thread::sleep(Duration::from_millis(1));
             }
         } else {
+            // The loop sleeps until its next timer without looking at
+            // `wake`: a short slice keeps a command from waiting for it.
             let wake = commands.wake.clone();
-            browser.run_until(Duration::from_millis(10), |_| wake.load(Ordering::SeqCst));
+            browser.run_until(Duration::from_millis(1), |_| wake.load(Ordering::SeqCst));
             match commands.rx.recv_timeout(Duration::from_millis(2)) {
                 Ok(m) => {
                     commands.wake.store(false, Ordering::SeqCst);
@@ -730,7 +732,7 @@ impl Driver {
                 }
                 self.session().frame = None;
                 let handles = self.handles(browser);
-                if handles.is_empty() {
+                if handles.as_array().is_some_and(<[Json]>::is_empty) {
                     self.session = None;
                 }
                 done(handles)

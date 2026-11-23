@@ -16,25 +16,43 @@ El contrato técnico está en [`vault/CONTRACT.md`](vault/CONTRACT.md) y las fue
 | K0 | Fundación: contrato, investigación, plan | Cerrada |
 | K1 | Arnés de medición y referencias (Firefox, Chromium, Servo, Boa) | Cerrada |
 | K2 | Motor JavaScript `vjs` medido con test262 | Cerrada |
-| K3 | Red, TLS, documento, DOM, bucle de eventos y WebDriver | Pendiente |
+| K3 | Red, TLS, documento, DOM, bucle de eventos y WebDriver | Cerrada |
 | K4 | CSS, layout, texto, pintado y ventana | Pendiente |
 | K5 | Conformidad y pisos de éxito | Pendiente |
 
 ## Resultados
 
-Los pisos de éxito son `R(total) ≥ R_servo(total)` en web-platform-tests, ningún directorio del alcance en cero, y `P ≥ P_boa` en test262. vidrio todavía no se mide en web-platform-tests: `R` aún no existe.
+Los pisos de éxito son `R(total) ≥ R_servo(total)` en web-platform-tests, ningún directorio del alcance en cero, y `P ≥ P_boa` en test262. El piso de test262 se cumple desde K3. `R(total)` todavía no existe, porque vidrio aún no se mide en los 19 directorios de CSS.
 
-Medición de `vjs` en K2, en esta PC, con test262 `9ae074624e2d`, el mismo corredor, las mismas 17 features excluidas y los mismos 92 012 escenarios que Boa (`bench/results/test262/vjs/d191e7f9a909a1be.json` y `bench/results/ratio.json`):
+Medición de `vjs` en K3, en esta PC, con test262 `9ae074624e2d`, el mismo corredor, las mismas 17 features excluidas y los mismos 92 012 escenarios que Boa (`bench/results/test262/vjs/b57e0ba2479a5a38.json` y `bench/results/ratio.json`):
 
-| Área | `vjs` | Boa 0.22.0 |
-| --- | ---: | ---: |
-| `test/language` | 43 738 / 43 802 | 43 437 / 43 802 |
-| `test/built-ins` | 46 698 / 46 885 | 45 861 / 46 885 |
-| `test/annexB` | 1 317 / 1 325 | 1 300 / 1 325 |
-| **Total** | **91 753 / 92 012** | **90 598 / 92 012** |
-| `P` | **0.9972** | **0.9846** |
+| Área | `vjs` (K3) | `vjs` (K2) | Boa 0.22.0 |
+| --- | ---: | ---: | ---: |
+| `test/language` | 43 776 / 43 802 | 43 738 / 43 802 | 43 437 / 43 802 |
+| `test/built-ins` | 46 863 / 46 885 | 46 698 / 46 885 | 45 861 / 46 885 |
+| `test/annexB` | 1 317 / 1 325 | 1 317 / 1 325 | 1 300 / 1 325 |
+| **Total** | **91 956 / 92 012** | **91 753 / 92 012** | **90 598 / 92 012** |
+| `P` | **0.9994** | **0.9972** | **0.9846** |
 
-Ninguna de las 90 áreas de segundo nivel de `test/language` y `test/built-ins` queda con cero escenarios aprobados. El binario `vjs` solo enlaza bibliotecas permitidas.
+Ningún escenario que pasaba en K2 falla en K3, y ninguno falla por tiempo límite. Los binarios `vidrio` y `vjs` solo enlazan bibliotecas permitidas.
+
+Medición de `vidrio` en K3, en esta PC, con web-platform-tests `77787fe5fe23` y el arnés oficial `./wpt run`, en los siete directorios de documento (`bench/results/wpt/vidrio/ffd9b5abe5486053-77787fe5fe23/` y `bench/results/ratio.json`):
+
+| Directorio | vidrio | Firefox | `R(D)` vs Firefox | `R(D)` vs Chromium | Pico de `memory.peak` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `html/syntax/parsing` | 2 372 | 7 867 | 0.3015 | 0.2919 | 903 741 440 B |
+| `html/syntax/serializing-html-fragments` | 369 | 352 | 1.0483 | 0.9814 | 782 716 928 B |
+| `dom` | 45 941 | 65 255 | 0.7040 | 0.6941 | 2 341 031 936 B |
+| `encoding` | 12 024 | 1 152 129 | 0.0104 | 0.0104 | 4 999 114 752 B |
+| `url` | 5 690 | 11 021 | 0.5163 | 0.4887 | 1 333 686 272 B |
+| `html/semantics/scripting-1` | 1 407 | 3 950 | 0.3562 | 0.3173 | 950 591 488 B |
+| `html/webappapis` | 1 969 | 3 371 | 0.5841 | 0.5491 | 1 572 102 144 B |
+
+Ningún directorio de documento queda con `R(D) = 0`. Además:
+
+- **HTTPS:** las pruebas `https` cargan por el TLS 1.3 propio de vidrio. En estos directorios, 11 de 25 terminan en `OK`.
+- **Crashtests:** el ejecutor de crashtests del arnés corre con vidrio, y `/dom/svg-insert-crash.html` da `PASS`.
+- **`third_party/test262` de WPT:** vidrio pasa 49 455 subtests de 53 794 pruebas, con un pico de 3 511 205 888 B.
 
 Medición de referencia de K1, en esta PC, con web-platform-tests `77787fe5fe23` y test262 `9ae074624e2d` (salida de `bench/ratio.py` en `bench/results/ratio.json`):
 
@@ -92,7 +110,12 @@ python3 bench/ratio.py                        # calcula R, R_servo, P y P_boa en
 python3 bench/stability.py --product vidrio --dir D  # compara dos corridas de D contra bench/flaky.json
 ```
 
-Los comandos del navegador se documentan aquí cuando existan.
+El navegador:
+
+```sh
+target/release/vidrio [--webdriver=PUERTO] [--headless] [--ca-cert=RUTA] [URL]  # con --webdriver expone el servidor WebDriver del arnés
+target/release/vidrio --version
+```
 
 ## Licencia
 

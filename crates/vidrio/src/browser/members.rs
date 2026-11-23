@@ -57,6 +57,7 @@ pub fn call(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> Opti
         "Document" | "DocumentOrShadowRoot" => document(agent, state, inv, member),
         "HTMLScriptElement" => script_element(agent, inv, member),
         "HTMLIFrameElement" => iframe_element(agent, inv, member),
+        "HTMLMetaElement" => meta_element(agent, inv, member),
         "MessageChannel" => message_channel(agent, state, inv, member),
         "MessagePort" => message_port(agent, inv, member),
         "MessageEvent"
@@ -1157,6 +1158,25 @@ fn iframe_element(agent: &mut Agent, inv: &Invocation, member: &str) -> Option<R
         }
         _ => return None,
     }))
+}
+
+/// `name`, `httpEquiv`, `content`, `media` and `scheme`: reflected strings
+/// (testharness.js reads `name` and `content` of every `<meta>`).
+fn meta_element(agent: &mut Agent, inv: &Invocation, member: &str) -> Option<R> {
+    let (doc, el) = this_node(inv)?;
+    let attr = |m: &str| {
+        if m == "httpEquiv" {
+            "http-equiv".to_string()
+        } else {
+            m.to_string()
+        }
+    };
+    if let Some(m) = member.strip_prefix("get_") {
+        return Some(Ok(reflect_string(&doc, el, &attr(m))));
+    }
+    let m = member.strip_prefix("set_")?;
+    set_attr(agent, &doc, el, &attr(m), &inv.str(0));
+    Some(Ok(IdlValue::Undefined))
 }
 
 // ----- messaging -------------------------------------------------------------------------

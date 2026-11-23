@@ -487,6 +487,15 @@ impl<'a> Parser<'a> {
         let old_await = self.await_pos.take();
         let old_await_ident = self.await_ident_pos.take();
         self.enter_scope(Self::function_flags(is_async, false) | ARROW);
+        // A direct eval in the parameters marked only the enclosing scopes.
+        if self
+            .last_direct_eval
+            .is_some_and(|p| p >= params_span.start && p < params_span.end)
+        {
+            if let Some(scope) = self.scopes.last_mut() {
+                scope.info.has_direct_eval = true;
+            }
+        }
         for (name, span) in params_bound_names(&params) {
             if is_async && name == "await" {
                 return Err(self.error(

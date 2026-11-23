@@ -687,7 +687,8 @@ impl Decoder {
     }
 
     /// The encoding in use: the one given, or the one a sniffed byte order
-    /// mark picked.
+    /// mark picked. After the end of a stream it stays the one that stream
+    /// used until the next stream is sniffed.
     pub fn encoding(&self) -> Encoding {
         self.encoding
     }
@@ -719,6 +720,8 @@ impl Decoder {
                 self.encoding = encoding;
                 self.state = State::new(encoding);
                 skip = len;
+            } else {
+                self.encoding = self.label_encoding;
             }
             return self.run(&head[skip..], last, out);
         }
@@ -755,7 +758,9 @@ impl Decoder {
             match self.state.handle(byte, &mut queue) {
                 Step::Continue => {}
                 Step::Finished => {
+                    let used = self.encoding;
                     self.reset();
+                    self.encoding = used;
                     return Ok(());
                 }
                 Step::Error => match self.mode {
@@ -832,6 +837,25 @@ mod tests {
         assert_eq!(out, "");
         d.decode(b"\xBF\xC3\xA9", true, &mut out).unwrap();
         assert_eq!(out, "\u{E9}");
+        assert_eq!(d.encoding(), Encoding::Utf8);
+    }
+
+    #[test]
+    fn sniffed_encoding_survives_the_end_of_stream() {
+        let mut d = Decoder::new(
+            Encoding::Windows1252,
+            DecoderErrorMode::Replacement,
+            BomHandling::Sniff,
+        );
+        let mut out = String::new();
+        d.decode(b"\xFE\xFF\x00a", true, &mut out).unwrap();
+        assert_eq!((out.as_str(), d.encoding()), ("a", Encoding::Utf16Be));
+        out.clear();
+        d.decode(b"\xE9", true, &mut out).unwrap();
+        assert_eq!(
+            (out.as_str(), d.encoding()),
+            ("\u{E9}", Encoding::Windows1252)
+        );
     }
 
     #[test]

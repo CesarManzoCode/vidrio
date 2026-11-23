@@ -251,6 +251,9 @@ pub(crate) struct Parser<'a> {
     pub(crate) await_ident_pos: Option<u32>,
     /// Start of the AssignmentExpression that may be an arrow function.
     pub(crate) potential_arrow_at: Option<u32>,
+    /// Start of the last direct `eval` call: one inside the parameters of
+    /// an arrow function was parsed (as a cover) before its scope existed.
+    pub(crate) last_direct_eval: Option<u32>,
     pub(crate) private: Vec<PrivateScope>,
     pub(crate) exported: HashSet<String>,
     pub(crate) undefined_exports: HashMap<String, Span>,
@@ -281,6 +284,7 @@ impl<'a> Parser<'a> {
             await_pos: None,
             await_ident_pos: None,
             potential_arrow_at: None,
+            last_direct_eval: None,
             private: Vec::new(),
             exported: HashSet::new(),
             undefined_exports: HashMap::new(),
@@ -747,7 +751,8 @@ impl<'a> Parser<'a> {
         self.mark_this_scopes(|info| info.uses_arguments = true);
     }
 
-    pub(crate) fn note_direct_eval(&mut self) {
+    pub(crate) fn note_direct_eval(&mut self, pos: u32) {
+        self.last_direct_eval = Some(pos);
         for scope in self.scopes.iter_mut() {
             if scope.flags & VAR_SCOPE != 0 {
                 scope.info.has_direct_eval = true;

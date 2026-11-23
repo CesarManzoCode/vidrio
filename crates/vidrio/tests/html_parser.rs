@@ -582,6 +582,9 @@ fn scripting_flag_and_form_pointer() {
     assert_eq!(d.element(input).and_then(|e| e.form_owner), Some(forms[0]));
 }
 
+/// The body of `text` serialized. Inputs whose first content belongs in
+/// `head` (`script`, `style`, `template`, `noscript`) or before `html` (a
+/// comment) start with `<body>` so that it lands in the body.
 fn body_html(text: &str) -> String {
     let d = parse_document(text, true);
     serialize_fragment(&d, d.body().expect("body"), true)
@@ -599,28 +602,28 @@ fn serialization_escapes_and_void_elements() {
     );
     assert_eq!(body_html("<pre>\n\nx</pre>"), "<pre>\nx</pre>");
     assert_eq!(
-        body_html("<script>a<b && c</script>"),
+        body_html("<body><script>a<b && c</script>"),
         "<script>a<b && c</script>"
     );
     assert_eq!(
-        body_html("<style>p > a {}</style>"),
+        body_html("<body><style>p > a {}</style>"),
         "<style>p > a {}</style>"
     );
     assert_eq!(
-        body_html("<template><p>x</p></template>"),
+        body_html("<body><template><p>x</p></template>"),
         "<template><p>x</p></template>"
     );
     assert_eq!(
         body_html("<svg viewBox='0 0 1 1'><foreignObject><b>x</b></foreignObject></svg>"),
         "<svg viewBox=\"0 0 1 1\"><foreignObject><b>x</b></foreignObject></svg>"
     );
-    assert_eq!(body_html("<!--a--><p>b</p>"), "<!--a--><p>b</p>");
+    assert_eq!(body_html("<body><!--a--><p>b</p>"), "<!--a--><p>b</p>");
     assert_eq!(
         body_html("<input disabled><hr/><wbr>"),
         "<input disabled=\"\"><hr><wbr>"
     );
     assert_eq!(
-        body_html("<noscript><b>x</b></noscript>"),
+        body_html("<body><noscript><b>x</b></noscript>"),
         "<noscript><b>x</b></noscript>"
     );
 

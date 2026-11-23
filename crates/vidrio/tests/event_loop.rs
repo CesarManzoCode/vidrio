@@ -338,3 +338,27 @@ window.addEventListener('message', function (e) {
         "frames:1:true|parent got echo:hello:2:true from-iframe:true origin-ok:true|port:via-port"
     );
 }
+
+#[test]
+fn meta_elements_reflect_their_attributes() {
+    // testharness.js reads `name` and `content` of every <meta> as it loads;
+    // a throwing getter left every WPT test without results until timeout.
+    let mut b = browser();
+    let id = b.open("about:blank").expect("about:blank");
+    b.evaluate(
+        id,
+        "var m = document.createElement('meta');
+         m.setAttribute('name', 'timeout');
+         m.setAttribute('content', 'long');
+         m.httpEquiv = 'refresh';
+         m.media = 'print';",
+    )
+    .expect("the script runs");
+    assert_eq!(
+        b.evaluate_to_string(
+            id,
+            "[m.name, m.content, m.getAttribute('http-equiv'), m.httpEquiv, m.media, m.scheme === ''].join(',')"
+        ),
+        "timeout,long,refresh,refresh,print,true"
+    );
+}

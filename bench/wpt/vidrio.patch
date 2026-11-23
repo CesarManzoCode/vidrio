@@ -64,10 +64,10 @@ index 1b15ab15c..960087bcf 100644
  
 diff --git a/tools/wptrunner/wptrunner/browsers/vidrio.py b/tools/wptrunner/wptrunner/browsers/vidrio.py
 new file mode 100644
-index 000000000..9b8340ab8
+index 000000000..9e1f18cef
 --- /dev/null
 +++ b/tools/wptrunner/wptrunner/browsers/vidrio.py
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,102 @@
 +# mypy: allow-untyped-defs
 +
 +import os
@@ -121,7 +121,10 @@ index 000000000..9b8340ab8
 +
 +
 +def env_options():
-+    return {}
++    # The server host is set to 127.0.0.1, as for Servo: vidrio resolves the
++    # test domains through HOST_FILE, so the servers do not need them in
++    # /etc/hosts.
++    return {"server_host": "127.0.0.1"}
 +
 +
 +def env_extras(**kwargs):

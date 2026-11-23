@@ -550,3 +550,40 @@ fn wptrunner_testharness_sequence_over_http() {
     server.shutdown();
     browser.join().unwrap();
 }
+
+#[test]
+fn commands_are_not_delayed_by_a_pending_timer() {
+    // wptrunner sends several commands between tests while the page still
+    // has timers; each one used to wait for the 10 ms slice of the loop.
+    let pages = page_server();
+    let (mut server, commands) = vidrio::webdriver::http::start("127.0.0.1:0").unwrap();
+    let addr = server.addr;
+    let browser = thread::spawn(move || {
+        let mut browser = Browser::new(BrowserOptions::default());
+        vidrio::webdriver::run(&mut browser, commands, Rc::new(BlankPainter), true);
+    });
+    let mut c = Client::connect(addr);
+    let (_, v) = c.raw("POST", "/session", Some(r#"{"capabilities":{}}"#));
+    c.session = v
+        .get("value")
+        .and_then(|v| v.get("sessionId"))
+        .and_then(Json::as_str)
+        .unwrap()
+        .to_string();
+    let url = format!("http://{pages}/runner.html");
+    c.ok("POST", "/url", Some(&format!(r#"{{"url":"{url}"}}"#)));
+    c.execute("setTimeout(function () {}, 60000);", "[]");
+    let start = std::time::Instant::now();
+    for _ in 0..50 {
+        c.ok("GET", "/window/handles", None);
+    }
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(250),
+        "50 commands took {elapsed:?}"
+    );
+    assert_eq!(c.ok("DELETE", "", None), Json::Null);
+    drop(c);
+    server.shutdown();
+    browser.join().unwrap();
+}

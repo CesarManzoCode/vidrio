@@ -624,7 +624,7 @@ impl<'a> Parser<'a> {
                 self.await_pos = old_await.or(self.await_pos);
                 self.await_ident_pos = old_await_ident.or(self.await_ident_pos);
                 if !optional && is_eval_reference(&base) {
-                    self.note_direct_eval();
+                    self.note_direct_eval(start);
                 }
                 base = self.expr(
                     start,

@@ -315,6 +315,13 @@ class PatchTest(unittest.TestCase):
             text,
         )
 
+    def test_servers_bind_to_loopback(self):
+        # Inside the network namespace /etc/hosts has no test domains; like
+        # Servo, the servers bind to 127.0.0.1 and vidrio uses HOST_FILE.
+        text = (BENCH / "wpt" / "vidrio.patch").read_text()
+        module = text.split("browsers/vidrio.py\nnew file mode", 1)[1].split("\ndiff --git", 1)[0]
+        self.assertIn('+    return {"server_host": "127.0.0.1"}', module)
+
 
 if __name__ == "__main__":
     unittest.main()

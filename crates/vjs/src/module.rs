@@ -354,15 +354,18 @@ fn alloc_record(agent: &mut Agent, record: ModuleRecord) -> Object {
 // ----- creation -----
 
 /// A Script Record for code evaluated by the host (`host_defined` is the
-/// base for the `import()` calls of the script).
+/// base for the `import()` calls of the script). Unlike module records it
+/// is not a root: its execution context, its functions and the host's
+/// pending `import()` referrers trace it, and a root would keep its realm
+/// alive after the host removed it.
 pub fn create_script_record(
     agent: &mut Agent,
     realm: Realm,
     host_defined: Option<Rc<str>>,
 ) -> Object {
-    alloc_record(
-        agent,
-        ModuleRecord {
+    agent.heap.create_object(
+        None,
+        ObjectKind::Module(Box::new(ModuleRecord {
             realm,
             host_defined,
             loaded: Vec::new(),
@@ -372,7 +375,7 @@ pub fn create_script_record(
             namespace: None,
             eval_error: None,
             top_level_capability: None,
-        },
+        })),
     )
 }
 
