@@ -354,3 +354,52 @@ fn dom_members_reach_the_native_implementation() {
         "a title,1,x,2,true,a b,c,true,true,1,InvalidCharacterError,5,true,true,1,true,,0"
     );
 }
+
+#[test]
+fn inline_style_reflects_the_style_attribute() {
+    let (mut agent, realm) = window(PAGE);
+    let r = run(
+        &mut agent,
+        realm,
+        r#"(function () {
+  var out = [];
+  var d = document.createElement("div");
+  var s = d.style;
+  out.push(s === d.style, s instanceof CSSStyleProperties, s.length, s.cssText === "");
+  s.setProperty("display", "none");
+  out.push(d.getAttribute("style"), s.getPropertyValue("DISPLAY"));
+  d.setAttribute("style", "color: red !important; bogus");
+  out.push(s.length, s.item(0), s[0], s.getPropertyPriority("color"));
+  d.style = "float: left";
+  out.push(s.cssFloat, s.cssText);
+  out.push(s.removeProperty("float"), d.getAttribute("style") === "", s.parentRule);
+  return out.join(",");
+})()"#,
+    );
+    assert_eq!(
+        r,
+        "true,true,0,true,display: none;,none,1,color,color,important,left,float: left;,left,true,"
+    );
+}
+
+#[test]
+fn dataset_maps_data_attributes() {
+    let (mut agent, realm) = window(PAGE);
+    let r = run(
+        &mut agent,
+        realm,
+        r#"(function () {
+  var out = [];
+  var d = document.createElement("div");
+  d.setAttribute("data-run-type", "url");
+  out.push(d.dataset === d.dataset, d.dataset.runType, Object.keys(d.dataset).join("|"));
+  d.dataset.fooBar = "x";
+  out.push(d.getAttribute("data-foo-bar"));
+  try { d.dataset["a-b"] = "y"; } catch (e) { out.push(e.name); }
+  delete d.dataset.runType;
+  out.push(d.hasAttribute("data-run-type"), "runType" in d.dataset);
+  return out.join(",");
+})()"#,
+    );
+    assert_eq!(r, "true,url,runType,x,SyntaxError,false,false");
+}

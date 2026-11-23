@@ -1,5 +1,6 @@
 //! Collections (DOM §4.2.10, §4.9.1, §7.1): `NodeList`, `HTMLCollection`
-//! and the `getElementsBy*` lists, `NamedNodeMap` and `DOMTokenList`.
+//! and the `getElementsBy*` lists, `NamedNodeMap`, `DOMTokenList` and the
+//! `DOMStringMap` of HTML's `dataset`.
 //!
 //! The live collections hold only their root and filter; every query
 //! walks the current tree, so they never go stale.
@@ -546,9 +547,129 @@ impl DomTokenList {
     }
 }
 
+// ----- DOMStringMap (HTML §3.2.6.6) ---------------------------------------------
+
+/// The `DOMStringMap` of `dataset`: the `data-*` attributes of an element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DomStringMap {
+    pub element: NodeId,
+}
+
+impl DomStringMap {
+    /// The name-value pairs: each attribute without namespace whose name
+    /// starts with `data-` and has no ASCII upper alpha, with the prefix
+    /// removed and each `-` before an ASCII lower alpha folded into the
+    /// uppercase letter.
+    pub fn pairs(&self, doc: &Document) -> Vec<(String, String)> {
+        let Some(e) = doc.element(self.element) else {
+            return Vec::new();
+        };
+        e.attrs
+            .iter()
+            .filter(|a| a.ns.is_none())
+            .filter_map(|a| {
+                let rest = a.local.strip_prefix("data-")?;
+                if rest.bytes().any(|b| b.is_ascii_uppercase()) {
+                    return None;
+                }
+                let mut name = String::with_capacity(rest.len());
+                let mut chars = rest.chars().peekable();
+                while let Some(c) = chars.next() {
+                    match chars.peek() {
+                        Some(&n) if c == '-' && n.is_ascii_lowercase() => {
+                            name.push(n.to_ascii_uppercase());
+                            chars.next();
+                        }
+                        _ => name.push(c),
+                    }
+                }
+                Some((name, a.value.clone()))
+            })
+            .collect()
+    }
+
+    /// The supported property names.
+    pub fn supported_property_names(&self, doc: &Document) -> Vec<String> {
+        self.pairs(doc).into_iter().map(|(n, _)| n).collect()
+    }
+
+    /// The value of the named property `name`.
+    pub fn get(&self, doc: &Document, name: &str) -> Option<String> {
+        self.pairs(doc)
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v)
+    }
+
+    /// The attribute name of property `name`: `data-` and `name` with a
+    /// `-` before each ASCII upper alpha, lowercased.
+    fn attribute_name(name: &str) -> String {
+        let mut out = String::from("data-");
+        for c in name.chars() {
+            if c.is_ascii_uppercase() {
+                out.push('-');
+                out.push(c.to_ascii_lowercase());
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// The named setter: `SyntaxError` if `name` has a `-` before an
+    /// ASCII lower alpha, `InvalidCharacterError` if the attribute name is
+    /// not a valid attribute local name.
+    pub fn set(&self, doc: &mut Document, name: &str, value: &str) -> Result<(), DomException> {
+        let b = name.as_bytes();
+        if b.windows(2)
+            .any(|w| w[0] == b'-' && w[1].is_ascii_lowercase())
+        {
+            return Err(DomException::SyntaxError);
+        }
+        let attr = Self::attribute_name(name);
+        if !super::implementation::is_valid_attribute_local_name(&attr) {
+            return Err(DomException::InvalidCharacterError);
+        }
+        doc.set_attribute_value(self.element, &attr, value, None, None);
+        Ok(())
+    }
+
+    /// The named deleter.
+    pub fn delete(&self, doc: &mut Document, name: &str) {
+        let attr = Self::attribute_name(name);
+        doc.remove_attribute_by_name(self.element, &attr);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_map_maps_data_attributes() {
+        let mut doc = Document::new_html();
+        let d = doc.create_html_element("div");
+        doc.set_attribute(d, "data-run-type", "url");
+        doc.set_attribute(d, "data-x-", "1");
+        doc.set_attribute(d, "datab", "no");
+        doc.set_attribute_value(d, "data-Upper", "no", None, None);
+        let map = DomStringMap { element: d };
+        assert_eq!(map.get(&doc, "runType").as_deref(), Some("url"));
+        assert_eq!(map.supported_property_names(&doc), ["runType", "x-"]);
+        assert_eq!(map.get(&doc, "Upper"), None);
+        map.set(&mut doc, "fooBar", "2").unwrap();
+        assert_eq!(doc.get_attribute(d, "data-foo-bar"), Some("2"));
+        assert_eq!(
+            map.set(&mut doc, "foo-bar", "3"),
+            Err(DomException::SyntaxError)
+        );
+        assert_eq!(
+            map.set(&mut doc, "a b", "3"),
+            Err(DomException::InvalidCharacterError)
+        );
+        map.delete(&mut doc, "runType");
+        assert_eq!(doc.get_attribute(d, "data-run-type"), None);
+    }
 
     #[test]
     fn live_collections_follow_the_tree() {

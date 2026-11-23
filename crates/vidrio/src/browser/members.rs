@@ -8,7 +8,8 @@
 //! `performance`), animation frames, dialogs without a user interface,
 //! `console`, `Location`, `History`, `Navigator`, `Performance`, the
 //! dynamic markup insertion and lifecycle members of `Document`,
-//! `HTMLScriptElement`, `HTMLIFrameElement`, `MessageChannel`,
+//! `HTMLScriptElement`, `HTMLIFrameElement`, `dataset` and its
+//! `DOMStringMap`, `MessageChannel`,
 //! `MessagePort`, the attributes of the HTML event interfaces and every
 //! event handler IDL attribute.
 
@@ -26,6 +27,7 @@ use crate::bindings::generated::interface_by_name;
 use crate::bindings::install::proto_from_new_target;
 use crate::bindings::platform::{self, Native, PlatformRef};
 use crate::bindings::{IdlValue, Invocation, RealmState};
+use crate::dom::collections::DomStringMap;
 use crate::dom::{DocRef, DomException, NodeId};
 use crate::url::Url;
 
@@ -58,6 +60,15 @@ pub fn call(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> Opti
         "HTMLScriptElement" => script_element(agent, inv, member),
         "HTMLIFrameElement" => iframe_element(agent, inv, member),
         "HTMLMetaElement" => meta_element(agent, inv, member),
+        "HTMLOrSVGOrMathMLElement" if member == "get_dataset" => {
+            let (doc, element) = this_node(inv)?;
+            let iface = interface_by_name("DOMStringMap")?;
+            let native = Native::StringMap(doc, DomStringMap { element });
+            Some(Ok(IdlValue::Object(platform::create(
+                agent, state, iface, native, None,
+            ))))
+        }
+        "DOMStringMap" => string_map(agent, inv, member),
         "MessageChannel" => message_channel(agent, state, inv, member),
         "MessagePort" => message_port(agent, inv, member),
         "MessageEvent"
@@ -1177,6 +1188,38 @@ fn meta_element(agent: &mut Agent, inv: &Invocation, member: &str) -> Option<R> 
     let m = member.strip_prefix("set_")?;
     set_attr(agent, &doc, el, &attr(m), &inv.str(0));
     Some(Ok(IdlValue::Undefined))
+}
+
+// ----- DOMStringMap ----------------------------------------------------------------------
+
+/// The named properties of the `DOMStringMap` of `dataset`.
+fn string_map(agent: &mut Agent, inv: &Invocation, member: &str) -> Option<R> {
+    let (doc, map) = match &*inv.this.as_ref()?.get().native.borrow() {
+        Native::StringMap(d, m) => (d.clone(), *m),
+        _ => return None,
+    };
+    Some(match member {
+        "supported_names" => Ok(IdlValue::Sequence(
+            map.supported_property_names(&doc.borrow())
+                .into_iter()
+                .map(IdlValue::String)
+                .collect(),
+        )),
+        "named_getter" => Ok(IdlValue::String(
+            map.get(&doc.borrow(), &inv.str(0)).unwrap_or_default(),
+        )),
+        "named_setter" => {
+            let r = map.set(&mut doc.borrow_mut(), &inv.str(0), &inv.str(1));
+            super::document::process_html_changes(agent, &doc);
+            dom_result(agent, r)
+        }
+        "named_deleter" => {
+            map.delete(&mut doc.borrow_mut(), &inv.str(0));
+            super::document::process_html_changes(agent, &doc);
+            Ok(IdlValue::Undefined)
+        }
+        _ => return None,
+    })
 }
 
 // ----- messaging -------------------------------------------------------------------------

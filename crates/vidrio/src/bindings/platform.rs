@@ -21,7 +21,7 @@ use super::meta::{Id, Ty};
 use super::value::{IdlValue, Invocation};
 use super::wrappers::DocTable;
 use crate::dom::abort::SignalId;
-use crate::dom::collections::{DomTokenList, HtmlCollection, NamedNodeMap, NodeList};
+use crate::dom::collections::{DomStringMap, DomTokenList, HtmlCollection, NamedNodeMap, NodeList};
 use crate::dom::events::EventRef;
 use crate::dom::observer::{MutationRecord, ObserverId};
 use crate::dom::range::{RangeId, StaticRange};
@@ -57,6 +57,10 @@ pub enum Native {
     HtmlCollection(DocRef, HtmlCollection),
     NamedNodeMap(DocRef, NamedNodeMap),
     TokenList(DocRef, DomTokenList),
+    /// The `DOMStringMap` of an element's `dataset`.
+    StringMap(DocRef, DomStringMap),
+    /// The `CSSStyleProperties` of an element's `style` attribute.
+    InlineStyle(DocRef, NodeId),
     Range(DocRef, RangeId),
     StaticRange(DocRef, StaticRange),
     NodeIterator(DocRef, IteratorId),
@@ -94,6 +98,8 @@ impl Native {
             | Native::HtmlCollection(d, _)
             | Native::NamedNodeMap(d, _)
             | Native::TokenList(d, _)
+            | Native::StringMap(d, _)
+            | Native::InlineStyle(d, _)
             | Native::Range(d, _)
             | Native::StaticRange(d, _)
             | Native::NodeIterator(d, _)

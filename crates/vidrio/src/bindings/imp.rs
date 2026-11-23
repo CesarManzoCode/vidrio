@@ -5,7 +5,9 @@
 //! tests need to reach their subjects: `window`, `document`, `body`,
 //! `head`, `title`, `innerHTML`, `outerHTML` and slots).
 //!
-//! Members of CSSOM and the rest exist on their objects and throw a
+//! The `style` of elements (`CSSStyleProperties` over the `style`
+//! attribute) is the one CSSOM member implemented here. The other
+//! members of CSSOM and the rest exist on their objects and throw a
 //! `TypeError` until their sprints implement them (HTML and the data APIs
 //! are routed to `crate::browser::members` and `crate::fetch` first),
 //! except for
@@ -34,6 +36,7 @@ use super::platform::{self, Native, ObserverRef, implements};
 use super::value::{Dict, IdlValue, Invocation};
 use super::wrappers::{move_wrappers, wrap_node, wrap_node_with};
 use super::{RealmState, current_state, host_value};
+use crate::css::declaration::DeclarationBlock;
 use crate::dom::abort::{SignalId, abort_signal_abort, abort_signal_timeout, signal_abort};
 use crate::dom::collections::{DomTokenList, HtmlCollection, NamedNodeMap, NodeList};
 use crate::dom::events::{
@@ -2073,6 +2076,73 @@ fn collection(agent: &mut Agent, inv: &Invocation) -> R {
     })
 }
 
+// ----- CSSStyleProperties of the style attribute (CSSOM §6.7) --------------------
+
+/// The element whose `style` attribute `this` is the declaration block of.
+fn inline_style_this(inv: &Invocation) -> Option<(DocRef, NodeId)> {
+    with_this(inv, |n| match n {
+        Native::InlineStyle(d, e) => Some((d.clone(), *e)),
+        _ => None,
+    })
+}
+
+/// The members of the `CSSStyleProperties` of an element's `style`
+/// attribute. The block is parsed from the attribute on every access and
+/// a change writes it back ("update style attribute for"), so it never
+/// goes stale.
+fn inline_style(agent: &mut Agent, inv: &Invocation) -> R {
+    let (doc, el) = need(agent, inline_style_this(inv))?;
+    let text = doc
+        .borrow()
+        .get_attribute(el, "style")
+        .unwrap_or_default()
+        .to_string();
+    let mut block = DeclarationBlock::parse(&text);
+    let write = |block: &DeclarationBlock| {
+        doc.borrow_mut()
+            .set_attribute_value(el, "style", &block.serialize(), None, None);
+    };
+    Ok(match inv.op {
+        Op::CSSStyleDeclaration_get_cssText => string(block.serialize()),
+        Op::CSSStyleDeclaration_set_cssText => {
+            write(&DeclarationBlock::parse(&inv.str(0)));
+            IdlValue::Undefined
+        }
+        Op::CSSStyleDeclaration_get_length | Op::CSSStyleDeclaration_index_count => {
+            IdlValue::Int(block.len() as i64)
+        }
+        Op::CSSStyleDeclaration_item => {
+            string(block.item(inv.usize(0)).unwrap_or_default().to_string())
+        }
+        Op::CSSStyleDeclaration_getPropertyValue => string(block.property_value(&inv.str(0))),
+        Op::CSSStyleDeclaration_getPropertyPriority => {
+            string(block.property_priority(&inv.str(0)).to_string())
+        }
+        Op::CSSStyleDeclaration_setProperty => {
+            if block.set_property(&inv.str(0), &inv.str(1), &inv.str(2)) {
+                write(&block);
+            }
+            IdlValue::Undefined
+        }
+        Op::CSSStyleDeclaration_removeProperty => match block.remove_property(&inv.str(0)) {
+            Some(old) => {
+                write(&block);
+                string(old)
+            }
+            None => string(String::new()),
+        },
+        Op::CSSStyleDeclaration_get_parentRule => IdlValue::Null,
+        Op::CSSStyleProperties_get_cssFloat => string(block.property_value("float")),
+        Op::CSSStyleProperties_set_cssFloat => {
+            if block.set_property("float", &inv.str(0), "") {
+                write(&block);
+            }
+            IdlValue::Undefined
+        }
+        op => return not_implemented(agent, op),
+    })
+}
+
 /// The native object of a collection.
 enum Coll {
     Nodes(DocRef, NodeList),
@@ -2475,6 +2545,18 @@ fn run(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> R {
             character_data(agent, state, inv)
         }
         "NodeList" | "HTMLCollection" | "NamedNodeMap" | "DOMTokenList" => collection(agent, inv),
+        "ElementCSSInlineStyle" if inv.op == Op::ElementCSSInlineStyle_get_style => {
+            let (doc, n) = this_node(agent, inv)?;
+            Ok(new_object(
+                agent,
+                state,
+                ids::CSSStyleProperties,
+                Native::InlineStyle(doc, n),
+            ))
+        }
+        "CSSStyleDeclaration" | "CSSStyleProperties" if inline_style_this(inv).is_some() => {
+            inline_style(agent, inv)
+        }
         "AbstractRange" | "Range" | "StaticRange" => range(agent, state, inv),
         "NodeIterator" | "TreeWalker" => traversal(agent, inv),
         "DOMException" => dom_exception(agent, state, inv),
