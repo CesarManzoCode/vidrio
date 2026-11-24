@@ -23,6 +23,7 @@ use super::parser::{
 use super::properties;
 use super::selectors::{NamespaceMap, parse_selector_list_with};
 use super::tokenizer::{Token, tokenize};
+use super::values::custom::{Registration, Syntax};
 use crate::dom::Namespace;
 
 pub type SheetRef = Rc<RefCell<StyleSheet>>;
@@ -1226,125 +1227,19 @@ pub fn css_escape(ident: &str) -> String {
 
 // ----- registered custom properties --------------------------------------------------
 
-const SYNTAX_TYPES: &[&str] = &[
-    "length",
-    "number",
-    "percentage",
-    "length-percentage",
-    "color",
-    "image",
-    "url",
-    "integer",
-    "angle",
-    "time",
-    "resolution",
-    "transform-function",
-    "custom-ident",
-    "transform-list",
-    "string",
-];
-
 /// Whether `syntax` is a valid syntax string (css-properties-values-api
 /// §5.4).
 pub fn syntax_valid(syntax: &str) -> bool {
-    let s = syntax.trim_matches(|c: char| c.is_ascii_whitespace());
-    if s.is_empty() {
-        return false;
-    }
-    if s == "*" {
-        return true;
-    }
-    for component in s.split('|') {
-        let c = component.trim_matches(|c: char| c.is_ascii_whitespace());
-        if c.is_empty() {
-            return false;
-        }
-        if let Some(rest) = c.strip_prefix('<') {
-            let (name, multiplier) = match rest.find('>') {
-                Some(i) => (&rest[..i], &rest[i + 1..]),
-                None => return false,
-            };
-            if !SYNTAX_TYPES.contains(&name) {
-                return false;
-            }
-            match multiplier {
-                "" => {}
-                "+" | "#" if name != "transform-list" => {}
-                _ => return false,
-            }
-        } else {
-            let tokens = tokenize(c);
-            match tokens.as_slice() {
-                [Token::Ident(id)]
-                    if !properties::is_css_wide_keyword(id)
-                        && !id.eq_ignore_ascii_case("default") => {}
-                _ => return false,
-            }
-        }
-    }
-    true
+    Syntax::parse(syntax).is_some()
 }
 
 /// The checks of `registerProperty` and `@property` on `syntax` and the
-/// initial value: `SyntaxError` when they fail.
+/// initial value (a match of the syntax that is computationally
+/// independent): `SyntaxError` when they fail.
 pub fn check_registration(syntax: &str, initial: Option<&str>) -> Result<(), RuleError> {
-    if !syntax_valid(syntax) {
-        return Err(RuleError::Syntax);
-    }
-    if syntax.trim() == "*" {
-        return Ok(());
-    }
-    let Some(initial) = initial else {
-        return Err(RuleError::Syntax);
-    };
-    let tokens: Vec<Token> = tokenize(initial)
-        .into_iter()
-        .filter(|t| *t != Token::Whitespace)
-        .collect();
-    if tokens.is_empty() {
-        return Err(RuleError::Syntax);
-    }
-    let types: Vec<&str> = syntax
-        .split('|')
-        .map(|c| {
-            c.trim()
-                .trim_start_matches('<')
-                .trim_end_matches(['+', '#'])
-                .trim_end_matches('>')
-        })
-        .collect();
-    let single = tokens.len() == 1;
-    let ok = types.iter().any(|ty| match (*ty, tokens.first()) {
-        // Computationally independent lengths only (no font or viewport
-        // relative units).
-        ("length", Some(Token::Dimension(_, unit))) if single => {
-            matches!(
-                unit.to_ascii_lowercase().as_str(),
-                "px" | "cm" | "mm" | "q" | "in" | "pt" | "pc"
-            )
-        }
-        ("length", Some(Token::Number(n))) if single => n.value == 0.0,
-        ("number", Some(Token::Number(_))) if single => true,
-        ("integer", Some(Token::Number(n))) if single => n.integer,
-        ("percentage", Some(Token::Percentage(_))) if single => true,
-        ("length-percentage", Some(Token::Percentage(_))) if single => true,
-        ("length-percentage", Some(Token::Dimension(_, unit))) if single => {
-            matches!(
-                unit.to_ascii_lowercase().as_str(),
-                "px" | "cm" | "mm" | "q" | "in" | "pt" | "pc"
-            )
-        }
-        ("custom-ident", Some(Token::Ident(s))) if single => !properties::is_css_wide_keyword(s),
-        (
-            "length" | "number" | "integer" | "percentage" | "length-percentage" | "custom-ident",
-            _,
-        ) => false,
-        (ident, Some(Token::Ident(s))) if !ident.starts_with('<') && single => {
-            ident.eq_ignore_ascii_case(s) || SYNTAX_TYPES.contains(&ident)
-        }
-        _ => true,
-    });
-    if ok { Ok(()) } else { Err(RuleError::Syntax) }
+    Registration::new("--registration", syntax, false, initial)
+        .map(|_| ())
+        .map_err(|_| RuleError::Syntax)
 }
 
 // ----- inserting and removing rules ------------------------------------------------

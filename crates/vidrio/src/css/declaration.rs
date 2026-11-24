@@ -5,13 +5,15 @@
 //! attribute, style rules and the descriptors of `@font-face`, `@page`
 //! and `@property`.
 //!
-//! Values are kept as their component values (tokens) and serialized
-//! back from them; the property grammars that validate and canonicalize
-//! each value come with the CSS values sprint (LIMITATIONS.md).
+//! Values of style declarations are matched against the property
+//! grammars of [`super::values::grammar`] and kept as the tokens of their
+//! canonical specified form; values with `var()`, custom properties and
+//! properties without a grammar are kept as written (LIMITATIONS.md).
 
 use super::parser::{declarations_of, parse_block_contents, to_tokens};
 use super::properties::{self, Kind, Shorthand};
 use super::tokenizer::{Numeric, Token, tokenize};
+use super::values::grammar;
 
 /// One declaration: a property name (lowercase unless custom), its value
 /// and its importance. A longhand set by a shorthand whose value has
@@ -677,8 +679,12 @@ fn line_default(other: &[Token]) -> Vec<Token> {
 /// (in the order of [`Shorthand::longhands`]); empty if the values cannot
 /// be written as the shorthand.
 fn serialize_shorthand(sh: &Shorthand, values: &[String]) -> String {
-    let initial = |i: usize| sh.longhands[i].1;
-    let is_initial = |i: usize| values[i].eq_ignore_ascii_case(initial(i));
+    let initial = |i: usize| {
+        let (name, text) = sh.longhands[i];
+        let tokens = tokenize(text);
+        serialize_tokens(&canonical_value(name, &tokens).unwrap_or(tokens))
+    };
+    let is_initial = |i: usize| values[i].eq_ignore_ascii_case(&initial(i));
     let compress = |v: &[String]| -> String {
         let (t, r, b, l) = (&v[0], &v[1], &v[2], &v[3]);
         if r == l {
@@ -810,24 +816,46 @@ fn parse_value(context: DeclContext, name: &str, value: &[Token]) -> Option<Vec<
                 );
             }
             let values = expand(sh, value)?;
-            return Some(
-                sh.longhands
-                    .iter()
-                    .zip(values)
-                    .map(|((l, _), v)| Item {
+            return sh
+                .longhands
+                .iter()
+                .zip(values)
+                .map(|((l, _), v)| {
+                    Some(Item {
                         name: l.to_string(),
-                        value: v,
+                        value: canonical_value(l, &v)?,
                         pending: None,
                     })
-                    .collect(),
-            );
+                })
+                .collect();
         }
+        return Some(vec![Item {
+            name: name.to_string(),
+            value: canonical_value(name, value)?,
+            pending: None,
+        }]);
     }
     Some(vec![Item {
         name: name.to_string(),
         value: value.to_vec(),
         pending: None,
     }])
+}
+
+/// The value of property `name` in its canonical specified form (CSSOM
+/// §6.7.2 through the property grammar), or `None` if it does not match
+/// the grammar. Custom properties, CSS-wide keywords, values with
+/// `var()` and properties without a grammar here are kept as written.
+fn canonical_value(name: &str, value: &[Token]) -> Option<Vec<Token>> {
+    let wide = matches!(value, [Token::Ident(k)] if properties::is_css_wide_keyword(k));
+    if is_custom_property(name) || wide || has_substitution(value) {
+        return Some(value.to_vec());
+    }
+    match grammar::specified(name, value) {
+        None => Some(value.to_vec()),
+        Some(Some(text)) => Some(tokenize(&text)),
+        Some(None) => None,
+    }
 }
 
 impl DeclarationBlock {
@@ -1358,7 +1386,7 @@ mod tests {
         assert_eq!(b.property_value("margin"), "");
         assert_eq!(
             b.serialize(),
-            "margin-top: 0 !important; margin-right: 2px; margin-bottom: 3px; margin-left: 2px;"
+            "margin-top: 0px !important; margin-right: 2px; margin-bottom: 3px; margin-left: 2px;"
         );
         let b = DeclarationBlock::parse("border: 1px solid red");
         assert_eq!(b.serialize(), "border: 1px solid red;");

@@ -167,7 +167,7 @@ fn nested_rules() {
     let s = parse_sheet(".a { color: red; &:hover { color: blue } .b & { x: y } top: 0 }");
     assert_eq!(
         texts(&s),
-        vec![".a {\n  color: red;\n  &:hover { color: blue; }\n  .b & { }\n  top: 0;\n}"]
+        vec![".a {\n  color: red;\n  &:hover { color: blue; }\n  .b & { }\n  top: 0px;\n}"]
     );
     let rule = s.borrow().rules[0].clone();
     let b = rule.borrow();
@@ -199,7 +199,7 @@ fn rule_serialization() {
         "@import url(\"a.css\") supports(display: grid) screen and (min-width: 100px);"
     );
     assert_eq!(t[1], "@namespace svg url(\"http://www.w3.org/2000/svg\");");
-    assert_eq!(t[2], "svg|a > b, c ~ d { margin: 0; }");
+    assert_eq!(t[2], "svg|a > b, c ~ d { margin: 0px; }");
     assert_eq!(t[3], "@media screen {\n  a { color: red; }\n}");
     assert!(t[4].starts_with("@font-face { font-family: x; src: url("));
     assert_eq!(t[5], "@page :first { margin: 1in; }");
