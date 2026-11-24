@@ -21,12 +21,13 @@
 //! - [`host`] implements [`crate::dom::host::DomHost`] so that DOM
 //!   algorithms call listeners, observers and filters;
 //! - [`imp`] implements the members natively on top of `crate::dom`,
-//!   after `crate::fetch` (the data APIs of k3-11) and
-//!   `crate::browser::members` (HTML) had their turn. Members without an
-//!   implementation (CSSOM, UI Events, …) exist on their objects and throw
-//!   a `TypeError` when used.
+//!   after [`cssom`] (CSSOM over `crate::css`), `crate::fetch` (the data
+//!   APIs of k3-11) and `crate::browser::members` (HTML) had their turn.
+//!   Members without an implementation (UI Events, …) exist on their
+//!   objects and throw a `TypeError` when used.
 
 pub mod convert;
+pub mod cssom;
 pub mod exception;
 pub mod generated;
 pub mod host;
@@ -112,6 +113,10 @@ pub struct RealmState {
     pub timeouts: RefCell<Vec<(DocRef, crate::dom::abort::SignalId, u64)>>,
     /// What the HTML user agent keeps per `Window` (k3-10).
     pub html: crate::browser::window::WindowData,
+    /// The objects of CSSOM sheets, rules and rule lists, by the address
+    /// of what they stand for and a tag (`S`, `R`, `L`); the entry keeps
+    /// that alive so that the address is not reused.
+    pub cssom: RefCell<HashMap<(usize, u8), (Rc<dyn std::any::Any>, Object)>>,
 }
 
 /// The number of reported exceptions a realm keeps.
@@ -145,6 +150,9 @@ impl Trace for RealmState {
             tracer.object(e);
         }
         self.html.trace(tracer);
+        for (_, o) in self.cssom.borrow().values() {
+            tracer.object(*o);
+        }
     }
 }
 
@@ -171,6 +179,7 @@ impl RealmState {
             time_origin: std::time::Instant::now(),
             timeouts: RefCell::new(Vec::new()),
             html: crate::browser::window::WindowData::default(),
+            cssom: RefCell::new(HashMap::new()),
         }
     }
 

@@ -1,6 +1,6 @@
-//! The CSS tokenizer of CSS Syntax Level 3 §4: input preprocessing and
-//! every token type. The selector parser reads its tokens; the stylesheet
-//! parser of K4 will reuse it.
+//! The CSS tokenizer of CSS Syntax Level 3 §4 (the current Editor's
+//! Draft): input preprocessing and every token type. The selector parser
+//! and the stylesheet parser of [`super::parser`] read its tokens.
 
 /// A numeric value with its type flag.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -66,8 +66,28 @@ fn preprocess(input: &str) -> Vec<char> {
     out
 }
 
+/// A non-ASCII ident code point (CSS Syntax §4.2).
+fn is_non_ascii_ident(c: char) -> bool {
+    matches!(c,
+        '\u{B7}'
+        | '\u{C0}'..='\u{D6}'
+        | '\u{D8}'..='\u{F6}'
+        | '\u{F8}'..='\u{37D}'
+        | '\u{37F}'..='\u{1FFF}'
+        | '\u{200C}'
+        | '\u{200D}'
+        | '\u{203F}'
+        | '\u{2040}'
+        | '\u{2070}'..='\u{218F}'
+        | '\u{2C00}'..='\u{2FEF}'
+        | '\u{3001}'..='\u{D7FF}'
+        | '\u{F900}'..='\u{FDCF}'
+        | '\u{FDF0}'..='\u{FFFD}'
+        | '\u{10000}'..)
+}
+
 fn is_ident_start(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || c >= '\u{80}'
+    c.is_ascii_alphabetic() || c == '_' || is_non_ascii_ident(c)
 }
 
 fn is_ident_char(c: char) -> bool {
@@ -105,8 +125,10 @@ impl Tokenizer {
         self.chars.get(self.pos + n).copied()
     }
 
+    /// "Two code points are a valid escape": a backslash not followed by
+    /// a newline (a backslash at the end of the input is one).
     fn valid_escape(a: Option<char>, b: Option<char>) -> bool {
-        a == Some('\\') && b != Some('\n') && b.is_some()
+        a == Some('\\') && b != Some('\n')
     }
 
     fn starts_ident(a: Option<char>, b: Option<char>, c: Option<char>) -> bool {

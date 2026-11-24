@@ -31,6 +31,7 @@ pub mod messaging;
 pub mod module;
 pub mod navigable;
 pub mod script;
+pub mod style;
 pub mod window;
 
 use std::cell::{Cell, RefCell};

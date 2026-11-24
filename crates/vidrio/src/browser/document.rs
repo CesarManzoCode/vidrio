@@ -331,7 +331,8 @@ pub fn run_parser(agent: &mut Agent, doc: &DocRef) {
             break;
         };
         if let Some(id) = info.pending_parsing_blocking.get() {
-            if !super::script::is_ready(&ua, id) {
+            // The script also waits for style sheets that block scripts.
+            if !super::script::is_ready(&ua, id) || crate::css::sheets::has_blocking(doc) {
                 break;
             }
             // "Execute the pending parsing-blocking script."
@@ -748,6 +749,25 @@ pub fn process_html_changes(agent: &mut Agent, doc: &DocRef) {
                     if script && connected && !parser_inserted {
                         super::script::prepare_script(agent, doc, n);
                     }
+                    let (link, style) = {
+                        let d = doc.borrow();
+                        (d.is_html_element(n, "link"), d.is_html_element(n, "style"))
+                    };
+                    if link && connected {
+                        super::style::link_changed(doc, n);
+                    }
+                    if style && connected {
+                        super::style::style_changed(doc, n);
+                    }
+                }
+                // The children changed steps of a style element.
+                let style_parent = {
+                    let d = doc.borrow();
+                    d.parent(node)
+                        .filter(|&p| d.is_html_element(p, "style") && d.is_connected(p))
+                };
+                if let Some(p) = style_parent {
+                    super::style::style_changed(doc, p);
                 }
                 // The children changed steps of a script element.
                 let parent = {
@@ -781,6 +801,10 @@ pub fn process_html_changes(agent: &mut Agent, doc: &DocRef) {
                         d.element(element).is_some_and(|e| e.script.parser_inserted),
                     )
                 };
+                let is_link = doc.borrow().is_html_element(element, "link");
+                if is_link && matches!(name.as_str(), "rel" | "href" | "media" | "type") {
+                    super::style::link_changed(doc, element);
+                }
                 if iframe && connected && (name == "src" || name == "srcdoc") {
                     iframes_changed = true;
                 }

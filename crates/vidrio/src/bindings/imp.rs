@@ -6,10 +6,11 @@
 //! `head`, `title`, `innerHTML`, `outerHTML` and slots).
 //!
 //! The `style` of elements (`CSSStyleProperties` over the `style`
-//! attribute) is the one CSSOM member implemented here. The other
-//! members of CSSOM and the rest exist on their objects and throw a
-//! `TypeError` until their sprints implement them (HTML and the data APIs
-//! are routed to `crate::browser::members` and `crate::fetch` first),
+//! attribute, with its property attributes) is implemented here; the
+//! rest of CSSOM is routed to `super::cssom` first. Members without an
+//! implementation exist on their objects and throw a `TypeError` until
+//! their sprints implement them (HTML and the data APIs are routed to
+//! `crate::browser::members` and `crate::fetch` first),
 //! except for
 //! three generic cases: event handler attributes (`on…`) keep the value
 //! they are given, and the index count and supported names of legacy
@@ -37,6 +38,7 @@ use super::value::{Dict, IdlValue, Invocation};
 use super::wrappers::{move_wrappers, wrap_node, wrap_node_with};
 use super::{RealmState, current_state, host_value};
 use crate::css::declaration::DeclarationBlock;
+use crate::css::properties::property_of_attribute;
 use crate::dom::abort::{SignalId, abort_signal_abort, abort_signal_timeout, signal_abort};
 use crate::dom::collections::{DomTokenList, HtmlCollection, NamedNodeMap, NodeList};
 use crate::dom::events::{
@@ -71,11 +73,14 @@ pub fn call(agent: &mut Agent, inv: &mut Invocation) -> R {
     let this_doc = with_this(inv, |n| n.document().cloned());
     // The members of HTML (k3-10) live with the user agent, those of the
     // data APIs (k3-11) in `crate::fetch`.
-    let result = match crate::fetch::call(agent, &state, inv) {
+    let result = match super::cssom::call(agent, &state, inv) {
         Some(r) => r,
-        None => match crate::browser::members::call(agent, &state, inv) {
+        None => match crate::fetch::call(agent, &state, inv) {
             Some(r) => r,
-            None => run(agent, &state, inv),
+            None => match crate::browser::members::call(agent, &state, inv) {
+                Some(r) => r,
+                None => run(agent, &state, inv),
+            },
         },
     };
     if let Some(doc) = &this_doc {
@@ -2139,7 +2144,20 @@ fn inline_style(agent: &mut Agent, inv: &Invocation) -> R {
             }
             IdlValue::Undefined
         }
-        op => return not_implemented(agent, op),
+        // The attributes of each property (CSSOM §6.7.1).
+        op => {
+            let name = op.name();
+            if let Some(attr) = name.strip_prefix("CSSStyleProperties_get_") {
+                string(block.property_value(&property_of_attribute(attr)))
+            } else if let Some(attr) = name.strip_prefix("CSSStyleProperties_set_") {
+                if block.set_property(&property_of_attribute(attr), &inv.str(0), "") {
+                    write(&block);
+                }
+                IdlValue::Undefined
+            } else {
+                return not_implemented(agent, op);
+            }
+        }
     })
 }
 
