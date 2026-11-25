@@ -5,7 +5,8 @@
 //! `CSSRule` subclass, the `CSSStyleDeclaration` of rules (with the
 //! named property attributes of `CSSStyleProperties` and of the
 //! descriptor interfaces), `MediaList`, the `CSS` namespace and
-//! `matchMedia` with its `MediaQueryList`.
+//! `matchMedia` with its `MediaQueryList`, and the read-only
+//! `CSSStyleProperties` of `getComputedStyle` over [`crate::css::style`].
 //!
 //! One object stands for each sheet, rule and rule list: the realm's
 //! identity map ([`super::RealmState::cssom`]) keeps it.
@@ -22,11 +23,14 @@ use super::exception;
 use super::generated::{Op, interface_by_name};
 use super::platform::{self, Native};
 use super::value::{IdlValue, Invocation};
+use crate::css::cascade::{self, Pseudo};
 use crate::css::declaration::DeclarationBlock;
 use crate::css::media::{self, Environment, MediaQueryList};
 use crate::css::om::{self, Owner, RuleError, RuleKind, RuleRef, SheetRef};
 use crate::css::properties;
 use crate::css::sheets;
+use crate::css::style;
+use crate::css::values::custom::Registration;
 use crate::dom::{DocRef, NodeId};
 
 type R = JsResult<IdlValue>;
@@ -58,6 +62,16 @@ pub enum MediaOwner {
 /// A `MediaList`.
 pub struct MediaData(pub MediaOwner);
 
+/// The `CSSStyleProperties` of `getComputedStyle`: live, it resolves
+/// the element's style on every access.
+pub struct ComputedData {
+    pub doc: DocRef,
+    pub element: NodeId,
+    pub pseudo: Option<Pseudo>,
+    /// False for an unknown pseudo-element: every value is empty.
+    pub valid: bool,
+}
+
 /// A `MediaQueryList`.
 pub struct MqlData {
     pub list: MediaQueryList,
@@ -68,12 +82,30 @@ thread_local! {
     static REGISTERED: RefCell<HashSet<(usize, String)>> = RefCell::new(HashSet::new());
 }
 
+/// The operations that may change a sheet, a rule or a declaration.
+const MUTATORS: &[&str] = &[
+    "insertRule",
+    "deleteRule",
+    "addRule",
+    "removeRule",
+    "replace",
+    "replaceSync",
+    "setProperty",
+    "removeProperty",
+    "appendMedium",
+    "deleteMedium",
+    "registerProperty",
+];
+
 /// Runs the CSSOM member `inv.op`, or returns `None` if it is not one.
 pub fn call(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> Option<R> {
     let name = inv.op.name();
     let (owner, member) = name.split_once('_')?;
     if member.starts_with("get_on") || member.starts_with("set_on") {
         return None;
+    }
+    if member.starts_with("set_") || MUTATORS.contains(&member) {
+        om::sheets_changed();
     }
     Some(match owner {
         "StyleSheet" | "CSSStyleSheet" => sheet(agent, state, inv, member),
@@ -95,6 +127,15 @@ pub fn call(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> Opti
         | "CSSPropertyRule"
         | "CSSNestedDeclarations"
         | "CSSFontFaceRule" => rule(agent, state, inv, member),
+        "CSSStyleDeclaration" | "CSSStyleProperties"
+            if inv
+                .this
+                .as_ref()
+                .and_then(crate::fetch::data_of::<ComputedData>)
+                .is_some() =>
+        {
+            computed(agent, inv, member)
+        }
         "CSSStyleDeclaration"
         | "CSSStyleProperties"
         | "CSSFontFaceDescriptors"
@@ -140,6 +181,7 @@ pub fn call(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> Opti
         }
         "CSS" => css_namespace(agent, state, inv, member),
         "Window" if member == "matchMedia" => match_media(agent, state, inv),
+        "Window" if member == "getComputedStyle" => get_computed_style(agent, state, inv),
         "MediaQueryList" => media_query_list(agent, state, inv, member),
         _ => return None,
     })
@@ -709,14 +751,113 @@ fn css_namespace(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation, me
             if let Err(e) = om::check_registration(&syntax, initial.as_deref()) {
                 return throw(agent, e);
             }
+            let inherits = d.bool("inherits").unwrap_or(false);
+            let registration = Registration::new(&name, &syntax, inherits, initial.as_deref());
             let key = (Rc::as_ptr(state) as usize, name);
             let fresh = REGISTERED.with(|r| r.borrow_mut().insert(key));
             if !fresh {
                 return throw(agent, RuleError::InvalidModification);
             }
+            if let (Some(doc), Ok(r)) = (state.document(), registration) {
+                cascade::register_property(&doc, r);
+            }
             IdlValue::Undefined
         }
         _ => return not_implemented(agent, inv.op),
+    })
+}
+
+// ----- getComputedStyle ------------------------------------------------------------
+
+/// The element argument `i`, if it is a node.
+fn node_arg(agent: &Agent, inv: &Invocation, i: usize) -> Option<(DocRef, NodeId)> {
+    let o = inv.object(i)?;
+    let p = platform::platform_ref(agent, Value::Object(o))?;
+    let native = p.get().native.borrow();
+    let out = match &*native {
+        Native::Node(d, n) => Some((d.clone(), *n)),
+        _ => None,
+    };
+    out
+}
+
+/// `getComputedStyle(elt, pseudoElt)` (CSSOM §9).
+fn get_computed_style(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation) -> R {
+    let Some((doc, element)) = node_arg(agent, inv, 0) else {
+        return agent.type_error("Argument 1 is not an Element.");
+    };
+    if !doc.borrow().is_element(element) {
+        return agent.type_error("Argument 1 is not an Element.");
+    }
+    let pseudo_text = match inv.arg(1) {
+        IdlValue::Missing | IdlValue::Undefined | IdlValue::Null => String::new(),
+        _ => inv.str(1),
+    };
+    // A pseudo-element argument counts only if it starts with a colon.
+    let (pseudo, valid) = if pseudo_text.starts_with(':') {
+        match Pseudo::parse(&pseudo_text) {
+            Some(p) => (Some(p), true),
+            None => (None, false),
+        }
+    } else {
+        (None, true)
+    };
+    Ok(new_data(
+        agent,
+        state,
+        "CSSStyleProperties",
+        Rc::new(ComputedData {
+            doc,
+            element,
+            pseudo,
+            valid,
+        }),
+    ))
+}
+
+fn no_modification<T>(agent: &mut Agent) -> JsResult<T> {
+    let o = exception::create(agent, "NoModificationAllowedError", "");
+    Err(Throw(Value::Object(o)))
+}
+
+/// The members of a computed style declaration: the resolved values,
+/// read-only.
+fn computed(agent: &mut Agent, inv: &Invocation, member: &str) -> R {
+    let c = this::<ComputedData>(agent, inv)?;
+    let style = if !c.valid {
+        None
+    } else {
+        match c.pseudo {
+            None => style::computed_style(&c.doc, c.element),
+            Some(p) => style::pseudo_style(&c.doc, c.element, p),
+        }
+    };
+    let value = |name: &str| {
+        style
+            .as_ref()
+            .map(|s| style::resolved_value(s, name))
+            .unwrap_or_default()
+    };
+    let names = || {
+        style
+            .as_ref()
+            .map(|s| style::resolved_names(s))
+            .unwrap_or_default()
+    };
+    Ok(match member {
+        "get_cssText" => string(""),
+        "get_length" | "index_count" => IdlValue::UInt(names().len() as u64),
+        "item" => string(names().get(inv.usize(0)).cloned().unwrap_or_default()),
+        "getPropertyValue" => string(value(&inv.str(0))),
+        "getPropertyPriority" => string(""),
+        "get_parentRule" => IdlValue::Null,
+        "get_cssFloat" => string(value("float")),
+        "set_cssText" | "setProperty" | "removeProperty" => return no_modification(agent),
+        m if m.starts_with("set_") => return no_modification(agent),
+        m => match m.strip_prefix("get_") {
+            Some(attr) => string(value(&properties::property_of_attribute(attr))),
+            None => return not_implemented(agent, inv.op),
+        },
     })
 }
 

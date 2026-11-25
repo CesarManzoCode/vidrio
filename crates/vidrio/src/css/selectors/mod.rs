@@ -13,8 +13,8 @@ use std::ops::Add;
 use crate::dom::Namespace;
 
 pub use matching::{
-    DefaultStates, ElementStates, MatchContext, matches_selector, matches_selector_list,
-    matches_slotted,
+    DefaultStates, ElementStates, MatchContext, matches_originating, matches_selector,
+    matches_selector_list, matches_slotted,
 };
 pub use parser::{NamespaceMap, ParseError, parse_selector_list, parse_selector_list_with};
 

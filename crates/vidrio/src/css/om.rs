@@ -11,7 +11,7 @@
 //! Rules and sheets are shared (`Rc<RefCell<…>>`) so that the bindings
 //! keep one object per rule; parents are weak references.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use super::declaration::{DeclContext, DeclarationBlock, serialize_identifier, serialize_string};
@@ -28,6 +28,21 @@ use crate::dom::Namespace;
 
 pub type SheetRef = Rc<RefCell<StyleSheet>>;
 pub type RuleRef = Rc<RefCell<Rule>>;
+
+thread_local! {
+    /// Grows whenever a sheet, rule or declaration may have changed.
+    static GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Records that some style sheet changed (the style system recalculates).
+pub fn sheets_changed() {
+    GENERATION.with(|g| g.set(g.get().wrapping_add(1)));
+}
+
+/// The generation of the style sheets of this thread.
+pub fn sheets_generation() -> u64 {
+    GENERATION.with(Cell::get)
+}
 
 /// The exceptions of the rule algorithms (their `DOMException` names).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,6 +298,7 @@ pub fn new_rule(kind: RuleKind) -> RuleRef {
 
 /// Sets the parent style sheet of `rule` and its descendants.
 pub fn set_parent_sheet(rule: &RuleRef, sheet: Option<&SheetRef>) {
+    sheets_changed();
     rule.borrow_mut().parent_sheet = sheet.map(Rc::downgrade);
     let children: Vec<RuleRef> = rule.borrow().kind.children().cloned().unwrap_or_default();
     for c in children {
@@ -1465,6 +1481,7 @@ pub fn delete_rule(owner: &Owner, index: usize) -> Result<(), RuleError> {
 /// Sets `selectorText` of a style or page rule; an invalid selector
 /// changes nothing.
 pub fn set_selector_text(rule: &RuleRef, text: &str) {
+    sheets_changed();
     let nested = rule
         .borrow()
         .parent_rule

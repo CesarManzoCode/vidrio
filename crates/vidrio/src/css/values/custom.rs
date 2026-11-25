@@ -283,6 +283,10 @@ impl Registry {
     pub fn get(&self, name: &str) -> Option<&Registration> {
         self.map.get(name)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
 }
 
 // ----- substitution ----------------------------------------------------------------------

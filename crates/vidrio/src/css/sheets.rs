@@ -165,6 +165,7 @@ pub fn set_link_sheet(doc: &DocRef, node: NodeId, sheet: Option<SheetRef>) {
             is_alternate(&d, node),
         )
     };
+    om::sheets_changed();
     with_doc(doc, |s| {
         s.owners.retain(|e| e.node != node);
         if let Some(sheet) = sheet {
@@ -224,6 +225,7 @@ pub fn adopted(doc: &DocRef, root: NodeId) -> Vec<SheetRef> {
 
 /// Sets the adopted style sheets of `root`.
 pub fn set_adopted(doc: &DocRef, root: NodeId, sheets: Vec<SheetRef>) {
+    om::sheets_changed();
     with_doc(doc, |s| {
         s.adopted.retain(|(n, _)| *n != root);
         s.adopted.push((root, sheets));

@@ -422,6 +422,9 @@ pub struct Document {
     /// Record [`HtmlChange`]s in `html_changes`.
     pub html_tracking: bool,
     pub html_changes: Vec<HtmlChange>,
+    /// Grows with every change to the nodes (tree, attributes, data) and
+    /// shadow roots; the style system recalculates when it moves.
+    style_generation: u64,
 }
 
 fn about_blank() -> Url {
@@ -444,6 +447,7 @@ impl Document {
             parser_cannot_change_mode: false,
             html_tracking: false,
             html_changes: Vec::new(),
+            style_generation: 0,
             ranges: Vec::new(),
             iterators: Vec::new(),
             observers: observer::ObserverState::default(),
@@ -478,7 +482,19 @@ impl Document {
     }
 
     pub fn node_mut(&mut self, id: NodeId) -> &mut Node {
+        self.style_generation = self.style_generation.wrapping_add(1);
         &mut self.nodes[id.index()]
+    }
+
+    /// The generation of the nodes: it changes whenever a node, an
+    /// attribute or a shadow root may have changed.
+    pub fn style_generation(&self) -> u64 {
+        self.style_generation
+    }
+
+    /// Marks the nodes as changed (for state kept outside the arena).
+    pub fn bump_style_generation(&mut self) {
+        self.style_generation = self.style_generation.wrapping_add(1);
     }
 
     fn push(&mut self, data: NodeData) -> NodeId {

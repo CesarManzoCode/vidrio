@@ -242,6 +242,24 @@ pub fn matches_selector(
     match_from(doc, selector, selector.compounds.len() - 1, element, ctx)
 }
 
+/// True if `element` is the originating element of a selector with a
+/// pseudo-element (`p::before` matches `p`): the selector without its
+/// pseudo-element matches it.
+pub fn matches_originating(
+    doc: &Document,
+    selector: &Selector,
+    element: NodeId,
+    ctx: &MatchContext,
+) -> bool {
+    if !doc.is_element(element) {
+        return false;
+    }
+    if selector.compounds.is_empty() {
+        return true;
+    }
+    match_from(doc, selector, selector.compounds.len() - 1, element, ctx)
+}
+
 /// True if a `::slotted(…)` selector applies to `element`: the element
 /// matches the argument and its assigned slot matches the rest.
 pub fn matches_slotted(

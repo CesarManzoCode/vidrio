@@ -430,6 +430,7 @@ impl Document {
 
     /// `slot.assign(...nodes)` for manual slot assignment.
     pub fn slot_assign(&mut self, slot: NodeId, nodes: &[NodeId]) {
+        self.bump_style_generation();
         let previous = self
             .shadow
             .manually_assigned
