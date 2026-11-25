@@ -256,6 +256,9 @@ pub fn update_readiness(agent: &mut Agent, doc: &DocRef, info: &DocInfo, readine
         EventInit::default(),
     );
     super::event_loop::clean_up_after_running_script(agent);
+    if readiness == Readiness::Complete {
+        crate::bindings::fonts::environment_settled(agent, doc);
+    }
 }
 
 // ----- the parser -----------------------------------------------------------------------
@@ -484,6 +487,9 @@ pub fn continue_the_end(agent: &mut Agent, doc: &DocRef) {
                 }
             }
             EndStep::AsapScripts => {
+                // Web fonts of `@font-face` rules delay `load`, as style
+                // sheets do.
+                crate::bindings::fonts::update_document(agent, doc);
                 let waiting = !info.asap_scripts.borrow().is_empty()
                     || !info.in_order_scripts.borrow().is_empty()
                     || info.load_delay.get() > 0;

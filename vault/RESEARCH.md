@@ -72,6 +72,7 @@ Consultas del 2026-11-09. Cada entrada dice qué se tomó de la fuente y cómo s
 | 48 | OpenType 1.9.1, https://learn.microsoft.com/typography/opentype/spec/ ; WOFF 1.0 y WOFF2 (W3C) | — | Fuentes |
 | 49 | PNG (W3C, 3.ª ed.), GIF89a, JPEG (ITU T.81) | — | Imágenes |
 | 50 | WHATWG HTML, tabla de referencias de caracteres con nombre, https://html.spec.whatwg.org/entities.json | Descargado el 2026-11-17T03:16:10Z (UTC); 145 897 bytes, 2231 nombres; sha256 `d741d877ac77c4194c4ad526b5b4a19aef8dfe411ab840a466891cdbb9f362e6` | Tabla `ENTITIES` del tokenizador HTML, generada por `crates/vidrio/gen/entities.py`, que rechaza otro sha256 |
+| 51 | Diccionario estático de Brotli (RFC 7932, Apéndice A), archivo oficial `c/common/dictionary.bin` de https://github.com/google/brotli | Rama `master` en `fbadc67bfce560b92e922f5645cc95bbffe38420`, descargado el 2026-11-25T01:22:34Z (UTC); 122 784 bytes; sha256 `20e42eb1b511c21806d4d227d07e5dd06877d8ce7b3a817f378f313653f35c70` | `crates/vnet/src/brotli_dictionary.bin`, incluido con `include_bytes!` por el decodificador brotli; el sha256 del archivo versionado coincide con el descargado |
 
 ## 5. Antecedentes (de la investigación adjunta)
 

@@ -613,6 +613,15 @@ fn define_iterable(agent: &mut Agent, state: &RealmState, proto: Object, id: Id)
             let mut iterator_fn = None;
             for m in methods {
                 let name = COLLECTION_METHODS[m];
+                // An operation the interface declares with the same name
+                // replaces the default one (Web IDL §3.7.11, §3.7.12).
+                if def
+                    .operations
+                    .iter()
+                    .any(|op| op.name == name && !op.is_static)
+                {
+                    continue;
+                }
                 let key = agent.heap.key_from_str(name);
                 let length = match name {
                     "entries" | "keys" | "values" | "clear" => 0,

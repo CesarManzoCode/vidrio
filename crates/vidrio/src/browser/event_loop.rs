@@ -607,6 +607,10 @@ fn update_the_rendering(agent: &mut Agent, ua: &Rc<UserAgent>, now: f64) {
             run_animation_frame_callbacks(agent, &state, now - origin);
         }
     }
+    // New `@font-face` rules start their loads before style and layout.
+    for doc in &docs {
+        crate::bindings::fonts::update_document(agent, doc);
+    }
     let hook = ua.event_loop.rendering_hook.borrow().clone();
     if let Some(hook) = hook {
         for doc in &docs {

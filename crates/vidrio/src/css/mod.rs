@@ -7,6 +7,7 @@
 
 pub mod cascade;
 pub mod declaration;
+pub mod font_face;
 pub mod hints;
 pub mod media;
 pub mod om;

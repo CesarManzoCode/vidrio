@@ -21,7 +21,8 @@
 //! - [`host`] implements [`crate::dom::host::DomHost`] so that DOM
 //!   algorithms call listeners, observers and filters;
 //! - [`imp`] implements the members natively on top of `crate::dom`,
-//!   after [`cssom`] (CSSOM over `crate::css`), `crate::fetch` (the data
+//!   after [`fonts`] (CSS Font Loading), [`cssom`] (CSSOM over
+//!   `crate::css`), `crate::fetch` (the data
 //!   APIs of k3-11) and `crate::browser::members` (HTML) had their turn.
 //!   Members without an implementation (UI Events, …) exist on their
 //!   objects and throw a `TypeError` when used.
@@ -29,6 +30,7 @@
 pub mod convert;
 pub mod cssom;
 pub mod exception;
+pub mod fonts;
 pub mod generated;
 pub mod host;
 pub mod imp;

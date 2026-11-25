@@ -73,13 +73,16 @@ pub fn call(agent: &mut Agent, inv: &mut Invocation) -> R {
     let this_doc = with_this(inv, |n| n.document().cloned());
     // The members of HTML (k3-10) live with the user agent, those of the
     // data APIs (k3-11) in `crate::fetch`.
-    let result = match super::cssom::call(agent, &state, inv) {
+    let result = match super::fonts::call(agent, &state, inv) {
         Some(r) => r,
-        None => match crate::fetch::call(agent, &state, inv) {
+        None => match super::cssom::call(agent, &state, inv) {
             Some(r) => r,
-            None => match crate::browser::members::call(agent, &state, inv) {
+            None => match crate::fetch::call(agent, &state, inv) {
                 Some(r) => r,
-                None => run(agent, &state, inv),
+                None => match crate::browser::members::call(agent, &state, inv) {
+                    Some(r) => r,
+                    None => run(agent, &state, inv),
+                },
             },
         },
     };
