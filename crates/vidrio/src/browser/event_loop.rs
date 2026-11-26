@@ -565,7 +565,8 @@ fn frame_requested(agent: &Agent, ua: &UserAgent) -> bool {
                 return true;
             }
         }
-        if hook.as_ref().is_some_and(|h| h.needs_update(&doc)) {
+        if hook.as_ref().is_some_and(|h| h.needs_update(&doc)) || crate::view::resize_pending(&doc)
+        {
             return true;
         }
     }
@@ -596,11 +597,14 @@ fn maybe_update_rendering(agent: &mut Agent, ua: &Rc<UserAgent>) -> bool {
     true
 }
 
-/// "Update the rendering" (HTML §8.1.7.3, steps 6–16): animation frame
-/// callbacks of every fully active document, then K4's style, layout and
-/// painting.
+/// "Update the rendering" (HTML §8.1.7.3, steps 6–16): the resize steps
+/// and animation frame callbacks of every fully active document, then
+/// K4's style, layout and painting.
 fn update_the_rendering(agent: &mut Agent, ua: &Rc<UserAgent>, now: f64) {
     let docs = super::navigable::fully_active_documents(ua);
+    for doc in &docs {
+        crate::view::run_resize_steps(agent, doc);
+    }
     for doc in &docs {
         if let Some(state) = super::window::state_of_document(agent, ua, doc) {
             let origin = state.html.time_origin.get();
@@ -653,6 +657,27 @@ pub fn run_animation_frame_callbacks(
         }
         clean_up_after_running_script(agent);
     }
+}
+
+/// How long a caller that also waits on other event sources (the X
+/// connection) may sleep before the loop has something to run: until the
+/// next timer or rendering opportunity, at most 10 ms while the network
+/// has pending fetches (they are polled, not waited on), and `None` when
+/// nothing is pending at all. Real clock only.
+pub fn idle_timeout(agent: &Agent) -> Option<Duration> {
+    let ua = super::ua()?;
+    let mut deadline = ua.event_loop.next_timer_deadline();
+    if frame_requested(agent, &ua) {
+        let f = next_frame_time(&ua);
+        deadline = Some(deadline.map_or(f, |d| d.min(f)));
+    }
+    let now = ua.event_loop.clock.now();
+    let wait = deadline.map(|d| Duration::from_secs_f64((d - now).max(0.0) / 1000.0));
+    if ua.net.has_pending() {
+        let poll = Duration::from_millis(10);
+        return Some(wait.map_or(poll, |w| w.min(poll)));
+    }
+    wait
 }
 
 /// Runs the loop until `done` is true, nothing is left, or `limit` of

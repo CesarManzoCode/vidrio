@@ -107,19 +107,19 @@ fn run(c: Config) -> ExitCode {
     if let Some(p) = &c.ca_cert {
         log::info(&format!("extra CA certificates from {}", p.display()));
     }
-    if !c.headless {
-        // The X11 window arrives with K4 (vault/CONTRACT.md §3.6).
-        log::info("no window yet: running headless");
-    }
     let options = BrowserOptions {
         ca_cert: c.ca_cert.clone(),
         ..BrowserOptions::default()
     };
     let mut browser = Browser::new(options);
+    let mut top = None;
     if let Some(arg) = &c.url {
         let url = url_for(arg);
         match browser.open(&url) {
-            Ok(_) => log::info(&format!("opening {url}")),
+            Ok(id) => {
+                log::info(&format!("opening {url}"));
+                top = Some(id);
+            }
             Err(e) => {
                 log::info(&format!("cannot open {arg}: {e}"));
                 return ExitCode::from(1);
@@ -128,6 +128,10 @@ fn run(c: Config) -> ExitCode {
     }
     match c.webdriver {
         Some(port) => {
+            if !c.headless {
+                // WebDriver sessions paint into their own framebuffer.
+                log::info("WebDriver runs without a window");
+            }
             let (mut server, commands) =
                 match vidrio::webdriver::http::start(&format!("127.0.0.1:{port}")) {
                     Ok(s) => s,
@@ -140,6 +144,23 @@ fn run(c: Config) -> ExitCode {
             let painter = Rc::new(vidrio::paint::DocumentPainter::new());
             vidrio::webdriver::run(&mut browser, commands, painter, c.headless);
             server.shutdown();
+        }
+        None if !c.headless => {
+            let ctx = match top {
+                Some(id) => id,
+                None => match browser.open("about:blank") {
+                    Ok(id) => id,
+                    Err(e) => {
+                        log::info(&format!("cannot open about:blank: {e}"));
+                        return ExitCode::from(1);
+                    }
+                },
+            };
+            if let Err(e) = vidrio::window::run(&mut browser, ctx) {
+                log::info(&format!("window: {e}"));
+                return ExitCode::from(1);
+            }
+            log::info("the window closed");
         }
         None => {
             browser.run_until_idle(Duration::from_secs(u64::from(u32::MAX)));

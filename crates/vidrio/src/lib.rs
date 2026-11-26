@@ -14,7 +14,9 @@ pub mod log;
 pub mod mime;
 pub mod paint;
 pub mod url;
+pub mod view;
 pub mod webdriver;
+pub mod window;
 pub mod xml;
 
 /// The Web IDL generator of `build.rs`, compiled here too so that its

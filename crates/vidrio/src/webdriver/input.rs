@@ -5,12 +5,14 @@
 //! `click`, `wheel`, `key*`, `focus`/`blur`, `input`) dispatched at the
 //! target.
 //!
-//! There is no layout in K3, so there is no hit testing: a pointer
-//! targets the element of its last `pointerMove` with an element origin
-//! (or the element last clicked), and otherwise the `body` (or the root
-//! element) of the current browsing context's document. Coordinates are
-//! the ones the actions give, relative to the viewport; an element
-//! origin counts as the viewport's origin (LIMITATIONS.md).
+//! WebDriver actions do not hit test: a pointer targets the element of
+//! its last `pointerMove` with an element origin (or the element last
+//! clicked), and otherwise the `body` (or the root element) of the
+//! current browsing context's document. Coordinates are the ones the
+//! actions give, relative to the viewport; an element origin counts as
+//! the viewport's origin (LIMITATIONS.md). The X window's input
+//! ([`window_pointer_move`] and the others) goes through the same event
+//! code with hit testing over the layout of `crate::view`.
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -137,12 +139,12 @@ fn active_document(ctx: ContextId) -> WdResult<DocRef> {
         .ok_or_else(|| WdError::new(ErrorCode::NoSuchWindow, "no such window"))
 }
 
-fn pointer_target(session: &Session, doc: &DocRef) -> Option<NodeId> {
-    alive(&session.input.pointer_target, doc).or_else(|| default_target(doc))
+fn pointer_target(input: &InputState, doc: &DocRef) -> Option<NodeId> {
+    alive(&input.pointer_target, doc).or_else(|| default_target(doc))
 }
 
-fn key_target(session: &Session, doc: &DocRef) -> Option<NodeId> {
-    alive(&session.input.focus, doc).or_else(|| default_target(doc))
+fn key_target(input: &InputState, doc: &DocRef) -> Option<NodeId> {
+    alive(&input.focus, doc).or_else(|| default_target(doc))
 }
 
 fn modifier_slots(m: Modifiers) -> Vec<(&'static str, Slot)> {
@@ -155,8 +157,8 @@ fn modifier_slots(m: Modifiers) -> Vec<(&'static str, Slot)> {
 }
 
 /// The attribute values of a mouse event at the pointer.
-fn mouse_slots(session: &Session, button: i16, detail: f64) -> Vec<(&'static str, Slot)> {
-    let i = &session.input;
+fn mouse_slots(input: &InputState, button: i16, detail: f64) -> Vec<(&'static str, Slot)> {
+    let i = &*input;
     let mut s = vec![
         ("clientX", Slot::Num(i.x)),
         ("clientY", Slot::Num(i.y)),
@@ -176,8 +178,8 @@ fn mouse_slots(session: &Session, button: i16, detail: f64) -> Vec<(&'static str
     s
 }
 
-fn pointer_slots(session: &Session, button: i16) -> Vec<(&'static str, Slot)> {
-    let mut s = mouse_slots(session, button, 0.0);
+fn pointer_slots(input: &InputState, button: i16) -> Vec<(&'static str, Slot)> {
+    let mut s = mouse_slots(input, button, 0.0);
     s.push(("pointerId", Slot::Num(1.0)));
     s.push(("pointerType", Slot::Str("mouse".to_string())));
     s.push(("isPrimary", Slot::Bool(true)));
@@ -185,7 +187,7 @@ fn pointer_slots(session: &Session, button: i16) -> Vec<(&'static str, Slot)> {
     s.push(("height", Slot::Num(1.0)));
     s.push((
         "pressure",
-        Slot::Num(if session.input.buttons != 0 { 0.5 } else { 0.0 }),
+        Slot::Num(if input.buttons != 0 { 0.5 } else { 0.0 }),
     ));
     s
 }
@@ -198,16 +200,16 @@ const POINTER: EventInterface = EventInterface::Other("PointerEvent");
 /// one, then `pointermove` and `mousemove`.
 fn move_pointer(
     browser: &mut Browser,
-    session: &mut Session,
+    input: &mut InputState,
     doc: &DocRef,
     target: NodeId,
     x: f64,
     y: f64,
 ) {
-    let old = pointer_target(session, doc);
-    session.input.x = x;
-    session.input.y = y;
-    session.input.pointer_target = Some((Rc::downgrade(doc), target));
+    let old = pointer_target(input, doc);
+    input.x = x;
+    input.y = y;
+    input.pointer_target = Some((Rc::downgrade(doc), target));
     if old != Some(target) {
         if let Some(old) = old {
             fire(
@@ -218,7 +220,7 @@ fn move_pointer(
                 POINTER,
                 true,
                 true,
-                pointer_slots(session, -1),
+                pointer_slots(input, -1),
             );
             fire(
                 browser,
@@ -228,7 +230,7 @@ fn move_pointer(
                 POINTER,
                 false,
                 false,
-                pointer_slots(session, -1),
+                pointer_slots(input, -1),
             );
             fire(
                 browser,
@@ -238,7 +240,7 @@ fn move_pointer(
                 EventInterface::MouseEvent,
                 true,
                 true,
-                mouse_slots(session, 0, 0.0),
+                mouse_slots(input, 0, 0.0),
             );
             fire(
                 browser,
@@ -248,7 +250,7 @@ fn move_pointer(
                 EventInterface::MouseEvent,
                 false,
                 false,
-                mouse_slots(session, 0, 0.0),
+                mouse_slots(input, 0, 0.0),
             );
         }
         fire(
@@ -259,7 +261,7 @@ fn move_pointer(
             POINTER,
             true,
             true,
-            pointer_slots(session, -1),
+            pointer_slots(input, -1),
         );
         fire(
             browser,
@@ -269,7 +271,7 @@ fn move_pointer(
             POINTER,
             false,
             false,
-            pointer_slots(session, -1),
+            pointer_slots(input, -1),
         );
         fire(
             browser,
@@ -279,7 +281,7 @@ fn move_pointer(
             EventInterface::MouseEvent,
             true,
             true,
-            mouse_slots(session, 0, 0.0),
+            mouse_slots(input, 0, 0.0),
         );
         fire(
             browser,
@@ -289,7 +291,7 @@ fn move_pointer(
             EventInterface::MouseEvent,
             false,
             false,
-            mouse_slots(session, 0, 0.0),
+            mouse_slots(input, 0, 0.0),
         );
     }
     let prevented = !fire(
@@ -300,7 +302,7 @@ fn move_pointer(
         POINTER,
         true,
         true,
-        pointer_slots(session, -1),
+        pointer_slots(input, -1),
     );
     if !prevented {
         fire(
@@ -311,22 +313,22 @@ fn move_pointer(
             EventInterface::MouseEvent,
             true,
             true,
-            mouse_slots(session, 0, 0.0),
+            mouse_slots(input, 0, 0.0),
         );
     }
 }
 
 /// Presses mouse button `button` over the pointer target.
-fn pointer_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, button: u16) {
+fn pointer_down(browser: &mut Browser, input: &mut InputState, doc: &DocRef, button: u16) {
     let bit = 1u16.checked_shl(u32::from(button)).unwrap_or(0);
-    if session.input.buttons & bit != 0 {
+    if input.buttons & bit != 0 {
         return;
     }
-    let Some(target) = pointer_target(session, doc) else {
+    let Some(target) = pointer_target(input, doc) else {
         return;
     };
-    session.input.buttons |= bit;
-    session.input.down_target = Some((Rc::downgrade(doc), target));
+    input.buttons |= bit;
+    input.down_target = Some((Rc::downgrade(doc), target));
     let b = button as i16;
     let prevented = !fire(
         browser,
@@ -336,7 +338,7 @@ fn pointer_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, butt
         POINTER,
         true,
         true,
-        pointer_slots(session, b),
+        pointer_slots(input, b),
     );
     if !prevented {
         fire(
@@ -347,24 +349,24 @@ fn pointer_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, butt
             EventInterface::MouseEvent,
             true,
             true,
-            mouse_slots(session, b, 1.0),
+            mouse_slots(input, b, 1.0),
         );
     }
     if button == 0 {
-        focus(browser, session, doc, target);
+        focus(browser, input, doc, target);
     }
 }
 
 /// Releases mouse button `button`: `pointerup`, `mouseup`, and a
 /// `click` (button 0) or `auxclick` when the press was on the same
 /// element.
-fn pointer_up(browser: &mut Browser, session: &mut Session, doc: &DocRef, button: u16) {
+fn pointer_up(browser: &mut Browser, input: &mut InputState, doc: &DocRef, button: u16) {
     let bit = 1u16.checked_shl(u32::from(button)).unwrap_or(0);
-    if session.input.buttons & bit == 0 {
+    if input.buttons & bit == 0 {
         return;
     }
-    session.input.buttons &= !bit;
-    let Some(target) = pointer_target(session, doc) else {
+    input.buttons &= !bit;
+    let Some(target) = pointer_target(input, doc) else {
         return;
     };
     let b = button as i16;
@@ -376,7 +378,7 @@ fn pointer_up(browser: &mut Browser, session: &mut Session, doc: &DocRef, button
         POINTER,
         true,
         true,
-        pointer_slots(session, b),
+        pointer_slots(input, b),
     );
     if !prevented {
         fire(
@@ -387,11 +389,11 @@ fn pointer_up(browser: &mut Browser, session: &mut Session, doc: &DocRef, button
             EventInterface::MouseEvent,
             true,
             true,
-            mouse_slots(session, b, 1.0),
+            mouse_slots(input, b, 1.0),
         );
     }
-    let same = alive(&session.input.down_target, doc) == Some(target);
-    session.input.down_target = None;
+    let same = alive(&input.down_target, doc) == Some(target);
+    input.down_target = None;
     if same {
         let name = if button == 0 { "click" } else { "auxclick" };
         fire(
@@ -402,19 +404,19 @@ fn pointer_up(browser: &mut Browser, session: &mut Session, doc: &DocRef, button
             POINTER,
             true,
             true,
-            mouse_slots(session, b, 1.0),
+            mouse_slots(input, b, 1.0),
         );
     }
 }
 
 /// Moves the focus to `target`: `blur`/`focusout` at the old element,
 /// `focus`/`focusin` at the new one.
-fn focus(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: NodeId) {
-    let old = alive(&session.input.focus, doc);
+fn focus(browser: &mut Browser, input: &mut InputState, doc: &DocRef, target: NodeId) {
+    let old = alive(&input.focus, doc);
     if old == Some(target) {
         return;
     }
-    session.input.focus = Some((Rc::downgrade(doc), target));
+    input.focus = Some((Rc::downgrade(doc), target));
     let focus_iface = EventInterface::Other("FocusEvent");
     if let Some(old) = old {
         fire(
@@ -615,14 +617,14 @@ fn set_text_value(d: &mut Document, node: NodeId, value: &str) {
 
 /// Presses key `c` at `target`: `keydown`, then for a printable key
 /// `keypress`, the text edit of an editable target and `input`.
-fn key_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: NodeId, c: char) {
+fn key_down(browser: &mut Browser, input: &mut InputState, doc: &DocRef, target: NodeId, c: char) {
     let (key, location) = key_of(c);
-    let repeat = session.input.pressed.contains(&c);
+    let repeat = input.pressed.contains(&c);
     if !repeat {
-        session.input.pressed.push(c);
+        input.pressed.push(c);
     }
-    set_modifier(&mut session.input.modifiers, &key, true);
-    let slots = |session: &Session| {
+    set_modifier(&mut input.modifiers, &key, true);
+    let slots = |input: &InputState| {
         let mut s = vec![
             ("key", Slot::Str(key.clone())),
             ("code", Slot::Str(code_of(c))),
@@ -630,7 +632,7 @@ fn key_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: 
             ("repeat", Slot::Bool(repeat)),
             ("isComposing", Slot::Bool(false)),
         ];
-        s.extend(modifier_slots(session.input.modifiers));
+        s.extend(modifier_slots(input.modifiers));
         s
     };
     let iface = EventInterface::Other("KeyboardEvent");
@@ -642,11 +644,11 @@ fn key_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: 
         iface,
         true,
         true,
-        slots(&*session),
+        slots(&*input),
     ) {
         return;
     }
-    let m = session.input.modifiers;
+    let m = input.modifiers;
     let printable = key.chars().count() == 1 && !m.ctrl && !m.meta;
     let enter = key == "Enter";
     if (printable || enter)
@@ -658,7 +660,7 @@ fn key_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: 
             iface,
             true,
             true,
-            slots(&*session),
+            slots(&*input),
         )
     {
         return;
@@ -697,13 +699,13 @@ fn key_down(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: 
 }
 
 /// Releases key `c` at `target`: `keyup`.
-fn key_up(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: NodeId, c: char) {
-    let Some(i) = session.input.pressed.iter().position(|x| *x == c) else {
+fn key_up(browser: &mut Browser, input: &mut InputState, doc: &DocRef, target: NodeId, c: char) {
+    let Some(i) = input.pressed.iter().position(|x| *x == c) else {
         return;
     };
-    session.input.pressed.remove(i);
+    input.pressed.remove(i);
     let (key, location) = key_of(c);
-    set_modifier(&mut session.input.modifiers, &key, false);
+    set_modifier(&mut input.modifiers, &key, false);
     let mut s = vec![
         ("key", Slot::Str(key)),
         ("code", Slot::Str(code_of(c))),
@@ -711,7 +713,7 @@ fn key_up(browser: &mut Browser, session: &mut Session, doc: &DocRef, target: No
         ("repeat", Slot::Bool(false)),
         ("isComposing", Slot::Bool(false)),
     ];
-    s.extend(modifier_slots(session.input.modifiers));
+    s.extend(modifier_slots(input.modifiers));
     fire(
         browser,
         doc,
@@ -938,17 +940,17 @@ pub fn perform_actions(
             match action {
                 Action::Pause(d) => duration = duration.max(*d),
                 Action::KeyDown(c) => {
-                    if let Some(t) = key_target(session, &doc) {
-                        key_down(browser, session, &doc, t, *c);
+                    if let Some(t) = key_target(&session.input, &doc) {
+                        key_down(browser, &mut session.input, &doc, t, *c);
                     }
                 }
                 Action::KeyUp(c) => {
-                    if let Some(t) = key_target(session, &doc) {
-                        key_up(browser, session, &doc, t, *c);
+                    if let Some(t) = key_target(&session.input, &doc) {
+                        key_up(browser, &mut session.input, &doc, t, *c);
                     }
                 }
-                Action::PointerDown(b) => pointer_down(browser, session, &doc, *b),
-                Action::PointerUp(b) => pointer_up(browser, session, &doc, *b),
+                Action::PointerDown(b) => pointer_down(browser, &mut session.input, &doc, *b),
+                Action::PointerUp(b) => pointer_up(browser, &mut session.input, &doc, *b),
                 Action::PointerMove {
                     x,
                     y,
@@ -957,13 +959,13 @@ pub fn perform_actions(
                 } => {
                     duration = duration.max(*d);
                     let (target, x, y) = resolve_origin(session, ctx, &doc, origin, *x, *y)?;
-                    let target = target.or_else(|| pointer_target(session, &doc));
+                    let target = target.or_else(|| pointer_target(&session.input, &doc));
                     if let Some(t) = target {
-                        move_pointer(browser, session, &doc, t, x, y);
+                        move_pointer(browser, &mut session.input, &doc, t, x, y);
                     }
                 }
                 Action::PointerCancel => {
-                    if let Some(t) = pointer_target(session, &doc) {
+                    if let Some(t) = pointer_target(&session.input, &doc) {
                         fire(
                             browser,
                             &doc,
@@ -972,7 +974,7 @@ pub fn perform_actions(
                             POINTER,
                             true,
                             false,
-                            pointer_slots(session, -1),
+                            pointer_slots(&session.input, -1),
                         );
                     }
                     session.input.buttons = 0;
@@ -987,7 +989,7 @@ pub fn perform_actions(
                 } => {
                     duration = duration.max(*d);
                     let (target, x, y) = resolve_origin(session, ctx, &doc, origin, *x, *y)?;
-                    let target = target.or_else(|| pointer_target(session, &doc));
+                    let target = target.or_else(|| pointer_target(&session.input, &doc));
                     if let Some(t) = target {
                         let mut s = vec![
                             ("clientX", Slot::Num(x)),
@@ -1023,13 +1025,13 @@ pub fn release_actions(browser: &mut Browser, session: &mut Session, ctx: Contex
     if let Ok(doc) = active_document(ctx) {
         let keys: Vec<char> = session.input.pressed.iter().rev().copied().collect();
         for c in keys {
-            if let Some(t) = key_target(session, &doc) {
-                key_up(browser, session, &doc, t, c);
+            if let Some(t) = key_target(&session.input, &doc) {
+                key_up(browser, &mut session.input, &doc, t, c);
             }
         }
         for b in 0..16u16 {
             if session.input.buttons & (1 << b) != 0 {
-                pointer_up(browser, session, &doc, b);
+                pointer_up(browser, &mut session.input, &doc, b);
             }
         }
     }
@@ -1061,9 +1063,9 @@ pub fn element_click(
         return invalid_argument("cannot click a file input");
     }
     let (x, y) = (session.input.x, session.input.y);
-    move_pointer(browser, session, &doc, node, x, y);
-    pointer_down(browser, session, &doc, 0);
-    pointer_up(browser, session, &doc, 0);
+    move_pointer(browser, &mut session.input, &doc, node, x, y);
+    pointer_down(browser, &mut session.input, &doc, 0);
+    pointer_up(browser, &mut session.input, &doc, 0);
     Ok(())
 }
 
@@ -1077,34 +1079,111 @@ pub fn element_send_keys(
     text: &str,
 ) -> WdResult<()> {
     let (doc, node) = script::known_element(&session.elements, ctx, id)?;
-    focus(browser, session, &doc, node);
+    focus(browser, &mut session.input, &doc, node);
     let mut held: Vec<char> = Vec::new();
     for c in text.chars() {
         let (key, _) = key_of(c);
         let modifier = matches!(key.as_str(), "Shift" | "Control" | "Alt" | "Meta");
         if c == '\u{E000}' {
             for m in held.drain(..).rev() {
-                key_up(browser, session, &doc, node, m);
+                key_up(browser, &mut session.input, &doc, node, m);
             }
             continue;
         }
         if modifier {
             if held.contains(&c) {
                 held.retain(|x| *x != c);
-                key_up(browser, session, &doc, node, c);
+                key_up(browser, &mut session.input, &doc, node, c);
             } else {
                 held.push(c);
-                key_down(browser, session, &doc, node, c);
+                key_down(browser, &mut session.input, &doc, node, c);
             }
             continue;
         }
-        key_down(browser, session, &doc, node, c);
-        key_up(browser, session, &doc, node, c);
+        key_down(browser, &mut session.input, &doc, node, c);
+        key_up(browser, &mut session.input, &doc, node, c);
     }
     for m in held.into_iter().rev() {
-        key_up(browser, session, &doc, node, m);
+        key_up(browser, &mut session.input, &doc, node, m);
     }
     Ok(())
+}
+
+// ----- the window's input ----------------------------------------------------------
+
+/// The pointer of the window moved to the client point (`x`, `y`): it
+/// targets the element hit testing finds there.
+pub fn window_pointer_move(
+    browser: &mut Browser,
+    input: &mut InputState,
+    doc: &DocRef,
+    x: f64,
+    y: f64,
+) {
+    let target = crate::view::element_from_point(doc, x, y).or_else(|| default_target(doc));
+    if let Some(t) = target {
+        move_pointer(browser, input, doc, t, x, y);
+    }
+}
+
+/// Mouse button `button` (0 main, 1 auxiliary, 2 secondary) of the
+/// window went down or up at the pointer.
+pub fn window_button(
+    browser: &mut Browser,
+    input: &mut InputState,
+    doc: &DocRef,
+    button: u16,
+    down: bool,
+) {
+    if down {
+        pointer_down(browser, input, doc, button);
+    } else {
+        pointer_up(browser, input, doc, button);
+    }
+}
+
+/// Key `c` (a raw key value) of the window went down or up at the
+/// focused element (or the body).
+pub fn window_key(
+    browser: &mut Browser,
+    input: &mut InputState,
+    doc: &DocRef,
+    c: char,
+    down: bool,
+) {
+    let Some(t) = key_target(input, doc) else {
+        return;
+    };
+    if down {
+        key_down(browser, input, doc, t, c);
+    } else {
+        key_up(browser, input, doc, t, c);
+    }
+}
+
+/// The wheel of the window turned by (`dx`, `dy`) pixels over the
+/// pointer: a `wheel` event at the element under it. Returns that
+/// element if the event was not canceled (the window then scrolls).
+pub fn window_wheel(
+    browser: &mut Browser,
+    input: &mut InputState,
+    doc: &DocRef,
+    dx: f64,
+    dy: f64,
+) -> Option<NodeId> {
+    let (x, y) = (input.x, input.y);
+    let target = crate::view::element_from_point(doc, x, y).or_else(|| default_target(doc))?;
+    let mut s = vec![
+        ("clientX", Slot::Num(x)),
+        ("clientY", Slot::Num(y)),
+        ("deltaX", Slot::Num(dx)),
+        ("deltaY", Slot::Num(dy)),
+        ("deltaZ", Slot::Num(0.0)),
+        ("deltaMode", Slot::Num(0.0)),
+    ];
+    s.extend(modifier_slots(input.modifiers));
+    let iface = EventInterface::Other("WheelEvent");
+    fire(browser, doc, target, "wheel", iface, true, true, s).then_some(target)
 }
 
 #[cfg(test)]

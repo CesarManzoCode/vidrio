@@ -3,7 +3,8 @@
 //! ([`build`]), which is rasterized into an RGBA8 framebuffer with
 //! premultiplied alpha ([`render`]). [`DocumentPainter`] runs style,
 //! layout and painting for the active document of a top-level browsing
-//! context; WebDriver screenshots read its framebuffer.
+//! context with the layout and scroll positions of [`crate::view`]; the
+//! window and WebDriver screenshots read its framebuffer.
 
 pub mod background;
 pub mod border;
@@ -118,15 +119,19 @@ impl Default for PaintOptions {
     }
 }
 
-/// Style, layout and the paint list of `doc`.
-pub fn display_list(doc: &DocRef, res: &dyn ImageSource, options: &PaintOptions) -> DisplayList {
+/// Style and layout of `doc`.
+fn layout_document(
+    doc: &DocRef,
+    res: &dyn ImageSource,
+    options: &PaintOptions,
+) -> crate::layout::fragment::FragmentTree {
     let styles = crate::css::style::styles(doc);
     let mut fonts = options.web_fonts.clone();
     fonts.extend(crate::bindings::fonts::web_faces(doc));
     let natural = |n: NodeId| res.natural_size(n);
     let (w, h) = options.viewport;
     let d = doc.borrow();
-    let tree = crate::layout::layout(
+    crate::layout::layout(
         &d,
         &styles,
         crate::layout::Options {
@@ -135,9 +140,42 @@ pub fn display_list(doc: &DocRef, res: &dyn ImageSource, options: &PaintOptions)
             system_fonts: options.system_fonts,
             images: &natural,
         },
-    );
-    let body = if d.is_html() { d.body() } else { None };
-    build::build(&tree, res.resources(), body)
+    )
+}
+
+/// The paint list of the fragment tree of `doc`.
+fn build_list(
+    doc: &DocRef,
+    tree: &crate::layout::fragment::FragmentTree,
+    res: &dyn ImageSource,
+) -> DisplayList {
+    let body = {
+        let d = doc.borrow();
+        if d.is_html() { d.body() } else { None }
+    };
+    build::build(tree, res.resources(), body)
+}
+
+/// Style, layout and the paint list of `doc`.
+pub fn display_list(doc: &DocRef, res: &dyn ImageSource, options: &PaintOptions) -> DisplayList {
+    build_list(doc, &layout_document(doc, res, options), res)
+}
+
+/// Renders `doc` as the browser shows it: the layout of [`crate::view`]
+/// when `options` are the document's viewport with the system fonts and
+/// no extra web fonts (a layout of its own otherwise), with the scroll
+/// positions of the document applied.
+pub fn paint_view(doc: &DocRef, res: &dyn ImageSource, options: &PaintOptions) -> Framebuffer {
+    let shared = options.system_fonts
+        && options.web_fonts.is_empty()
+        && options.viewport == crate::view::viewport_of(doc);
+    let tree = if shared {
+        crate::view::layout(doc)
+    } else {
+        std::rc::Rc::new(layout_document(doc, res, options))
+    };
+    let painted = crate::view::painted_tree(doc, &tree);
+    render::render(&build_list(doc, &painted, res)).into()
 }
 
 /// Renders `doc` into a framebuffer.
@@ -190,7 +228,7 @@ impl Painter for DocumentPainter {
         // loading now (they show in a later screenshot).
         images::update_document(agent, doc);
         let res = images::DocumentImages::new(doc);
-        paint_document(doc, &res, &self.options)
+        paint_view(doc, &res, &self.options)
     }
 }
 

@@ -8,7 +8,7 @@
 //!
 //! URLs in style sheets resolve against the document's base URL.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -31,6 +31,18 @@ enum Entry {
 
 thread_local! {
     static STORE: RefCell<HashMap<String, Entry>> = RefCell::new(HashMap::new());
+    /// Grows whenever an image arrives or breaks (layout depends on
+    /// natural sizes).
+    static GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The generation of the image store.
+pub fn generation() -> u64 {
+    GENERATION.with(Cell::get)
+}
+
+fn bump() {
+    GENERATION.with(|g| g.set(g.get().wrapping_add(1)));
 }
 
 /// The decoded image of an absolute URL, once it has arrived.
@@ -47,6 +59,7 @@ pub fn insert(url: &str, image: Image) {
         s.borrow_mut()
             .insert(url.to_string(), Entry::Ready(Rc::new(image)))
     });
+    bump();
 }
 
 /// Decodes and stores `bytes` for `url`; false if they do not decode.
@@ -57,6 +70,7 @@ pub fn insert_bytes(url: &str, bytes: &[u8]) -> bool {
     };
     let ok = matches!(entry, Entry::Ready(_));
     STORE.with(|s| s.borrow_mut().insert(url.to_string(), entry));
+    bump();
     ok
 }
 
@@ -153,6 +167,7 @@ pub fn update_document(agent: &mut Agent, doc: &DocRef) {
                 _ => Entry::Broken,
             };
             STORE.with(|s| s.borrow_mut().insert(href, entry));
+            bump();
             if let Some(info) = crate::browser::ua().and_then(|ua| ua.doc_info(&doc2)) {
                 info.load_delay.set(info.load_delay.get().saturating_sub(1));
             }

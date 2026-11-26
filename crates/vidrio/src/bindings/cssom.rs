@@ -820,8 +820,8 @@ fn no_modification<T>(agent: &mut Agent) -> JsResult<T> {
     Err(Throw(Value::Object(o)))
 }
 
-/// The members of a computed style declaration: the resolved values,
-/// read-only.
+/// The members of a computed style declaration: the resolved values
+/// (with the ones that depend on layout from `crate::view`), read-only.
 fn computed(agent: &mut Agent, inv: &Invocation, member: &str) -> R {
     let c = this::<ComputedData>(agent, inv)?;
     let style = if !c.valid {
@@ -833,6 +833,12 @@ fn computed(agent: &mut Agent, inv: &Invocation, member: &str) -> R {
         }
     };
     let value = |name: &str| {
+        if c.pseudo.is_none() && style.is_some() {
+            let lower = name.to_ascii_lowercase();
+            if let Some(v) = crate::view::resolved_layout_value(&c.doc, c.element, &lower) {
+                return v;
+            }
+        }
         style
             .as_ref()
             .map(|s| style::resolved_value(s, name))

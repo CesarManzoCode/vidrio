@@ -216,7 +216,8 @@ pub struct Scroll {
     /// the scrollport, and left of it in `ltr` or right of it in `rtl`).
     pub scrollable: Rect,
     /// The scroll position: the offset of the scrollport into the area
-    /// from its scroll origin. Always 0, 0 until scrolling exists.
+    /// from its scroll origin. Layout leaves it at 0, 0; the painted copy
+    /// of `crate::view::painted_tree` carries the document's.
     pub offset: (f64, f64),
 }
 

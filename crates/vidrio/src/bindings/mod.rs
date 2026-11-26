@@ -21,7 +21,8 @@
 //! - [`host`] implements [`crate::dom::host::DomHost`] so that DOM
 //!   algorithms call listeners, observers and filters;
 //! - [`imp`] implements the members natively on top of `crate::dom`,
-//!   after [`fonts`] (CSS Font Loading), [`cssom`] (CSSOM over
+//!   after [`view`] (CSSOM View over `crate::view`), [`fonts`] (CSS Font
+//!   Loading), [`cssom`] (CSSOM over
 //!   `crate::css`), `crate::fetch` (the data
 //!   APIs of k3-11) and `crate::browser::members` (HTML) had their turn.
 //!   Members without an implementation (UI Events, …) exist on their
@@ -39,6 +40,7 @@ pub mod meta;
 pub mod overload;
 pub mod platform;
 pub mod value;
+pub mod view;
 pub mod wrappers;
 
 use std::cell::{Cell, RefCell};
