@@ -5,7 +5,8 @@
 //! sum along each row gives the winding coverage. Curves are flattened to
 //! lines first. Coverage is `min(|winding|, 1)`: the non-zero rule for
 //! glyphs, whose contours do not overlap with opposite directions. Edges
-//! on pixel boundaries give exact 0 or 1 coverage.
+//! on pixel boundaries give exact 0 or 1 coverage. [`fill`] rasterizes
+//! any path in device pixels with the non-zero or the even-odd rule.
 
 use crate::outline::{Outline, Point, Segment};
 
@@ -235,14 +236,27 @@ impl Rasterizer {
     }
 
     /// Accumulates rows into coverage, one byte per pixel.
-    pub fn coverage(mut self) -> Vec<u8> {
+    pub fn coverage(self) -> Vec<u8> {
+        self.coverage_with(FillRule::NonZero)
+    }
+
+    /// Accumulates rows into coverage with `rule`: the non-zero rule
+    /// takes `min(|winding|, 1)`, the even-odd rule folds the winding
+    /// area into [0, 1] with period 2.
+    pub fn coverage_with(mut self, rule: FillRule) -> Vec<u8> {
         self.close();
         let mut out = vec![0u8; self.w * self.h];
         for y in 0..self.h {
             let mut acc = 0.0f32;
             for x in 0..self.w {
                 acc += self.acc[y * self.stride + x];
-                let c = acc.abs().min(1.0);
+                let c = match rule {
+                    FillRule::NonZero => acc.abs().min(1.0),
+                    FillRule::EvenOdd => {
+                        let v = acc.abs() % 2.0;
+                        if v > 1.0 { 2.0 - v } else { v }
+                    }
+                };
                 out[y * self.w + x] = (c * 255.0 + 0.5) as u8;
             }
         }
@@ -300,9 +314,62 @@ pub fn rasterize(outline: &Outline, scale: f32, dx: f32, dy: f32) -> Mask {
     }
 }
 
+/// How the winding of a path decides what is inside.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillRule {
+    NonZero,
+    EvenOdd,
+}
+
+/// Rasterizes `path` (device pixels, y down) with `rule` into a mask
+/// over its bounds intersected with the pixel rectangle `[x0, x1) ×
+/// [y0, y1)`; `left` and `top` of the mask are device coordinates.
+pub fn fill(path: &Outline, rule: FillRule, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> Mask {
+    let Some((bx0, by0, bx1, by1)) = path.control_bounds() else {
+        return Mask::default();
+    };
+    let left = (bx0.floor() as i32).max(x0);
+    let top = (by0.floor() as i32).max(y0);
+    let right = (bx1.ceil() as i32).min(x1);
+    let bottom = (by1.ceil() as i32).min(y1);
+    if right <= left || bottom <= top {
+        return Mask {
+            left,
+            top,
+            ..Mask::default()
+        };
+    }
+    let (width, height) = ((right - left) as u32, (bottom - top) as u32);
+    let mut r = Rasterizer::new(width, height);
+    let (dx, dy) = (left as f32, top as f32);
+    r.add_outline(path, |p| Point::new(p.x - dx, p.y - dy));
+    Mask {
+        width,
+        height,
+        left,
+        top,
+        data: r.coverage_with(rule),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn even_odd_leaves_a_hole() {
+        let mut o = rect(0.0, 0.0, 4.0, 4.0);
+        o.append(
+            &rect(1.0, 1.0, 3.0, 3.0),
+            &crate::outline::Transform::IDENTITY,
+        );
+        let m = fill(&o, FillRule::EvenOdd, (0, 0, 10, 10));
+        assert_eq!((m.width, m.height, m.left, m.top), (4, 4, 0, 0));
+        assert_eq!(m.get(0, 0), 255);
+        assert_eq!(m.get(1, 1), 0);
+        let m = fill(&o, FillRule::NonZero, (0, 0, 10, 10));
+        assert_eq!(m.get(1, 1), 255);
+    }
 
     fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Outline {
         let mut o = Outline::new();

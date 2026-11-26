@@ -487,9 +487,10 @@ pub fn continue_the_end(agent: &mut Agent, doc: &DocRef) {
                 }
             }
             EndStep::AsapScripts => {
-                // Web fonts of `@font-face` rules delay `load`, as style
-                // sheets do.
+                // Web fonts of `@font-face` rules and images delay
+                // `load`, as style sheets do.
                 crate::bindings::fonts::update_document(agent, doc);
+                crate::paint::images::update_document(agent, doc);
                 let waiting = !info.asap_scripts.borrow().is_empty()
                     || !info.in_order_scripts.borrow().is_empty()
                     || info.load_delay.get() > 0;

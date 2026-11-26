@@ -11,7 +11,7 @@ use std::rc::Rc;
 use std::thread;
 
 use vidrio::browser::{Browser, BrowserOptions};
-use vidrio::paint::BlankPainter;
+use vidrio::paint::DocumentPainter;
 use vidrio::webdriver::json::Json;
 use vidrio::webdriver::script::{ELEMENT_KEY, WINDOW_KEY};
 
@@ -183,7 +183,12 @@ fn wptrunner_testharness_sequence_over_http() {
     let addr = server.addr;
     let browser = thread::spawn(move || {
         let mut browser = Browser::new(BrowserOptions::default());
-        vidrio::webdriver::run(&mut browser, commands, Rc::new(BlankPainter), true);
+        vidrio::webdriver::run(
+            &mut browser,
+            commands,
+            Rc::new(DocumentPainter::new()),
+            true,
+        );
     });
 
     let mut c = Client::connect(addr);
@@ -560,7 +565,12 @@ fn commands_are_not_delayed_by_a_pending_timer() {
     let addr = server.addr;
     let browser = thread::spawn(move || {
         let mut browser = Browser::new(BrowserOptions::default());
-        vidrio::webdriver::run(&mut browser, commands, Rc::new(BlankPainter), true);
+        vidrio::webdriver::run(
+            &mut browser,
+            commands,
+            Rc::new(DocumentPainter::new()),
+            true,
+        );
     });
     let mut c = Client::connect(addr);
     let (_, v) = c.raw("POST", "/session", Some(r#"{"capabilities":{}}"#));

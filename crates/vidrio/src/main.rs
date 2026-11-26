@@ -137,7 +137,7 @@ fn run(c: Config) -> ExitCode {
                     }
                 };
             log::info(&format!("WebDriver listening on {}", server.addr));
-            let painter = Rc::new(vidrio::paint::BlankPainter);
+            let painter = Rc::new(vidrio::paint::DocumentPainter::new());
             vidrio::webdriver::run(&mut browser, commands, painter, c.headless);
             server.shutdown();
         }

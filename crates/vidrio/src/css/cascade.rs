@@ -1374,7 +1374,7 @@ pub fn shorthand_value(d: &Declaration, longhand: &str) -> Option<Vec<Token>> {
     if keyword_of(&d.value).is_some_and(|k| properties::is_css_wide_keyword(&k)) {
         return Some(d.value.clone());
     }
-    if d.name == "background" {
+    if d.name == "background" && is_lone_color(&d.value) {
         // A lone color: `background-color` takes it, the other longhands
         // their initial values.
         if longhand == "background-color" {
@@ -1457,7 +1457,9 @@ fn with_initials(
 
 /// The longhand values of a shorthand vidrio keeps as one declaration
 /// but splits for the cascade: `font` (CSS Fonts 4 §2.8), `white-space`
-/// (css-text-4 §3) and `text-wrap` (css-text-4 §6.1). `None` for other
+/// (css-text-4 §3), `text-wrap` (css-text-4 §6.1), `background` and
+/// `background-position` (css-backgrounds-3 §3.10, §3.6) and
+/// `border-image` (css-backgrounds-3 §6.8). `None` for other
 /// shorthands, for values with `var()` and for invalid values.
 fn split_shorthand(name: &str, tokens: &[Token]) -> Option<Vec<(&'static str, Vec<Token>)>> {
     if tokens.iter().any(|t| matches!(t, Token::Function(f) if f.eq_ignore_ascii_case("var") || f.eq_ignore_ascii_case("attr") || f.eq_ignore_ascii_case("env"))) {
@@ -1514,8 +1516,349 @@ fn split_shorthand(name: &str, tokens: &[Token]) -> Option<Vec<(&'static str, Ve
             Some(with_initials("text-wrap", set))
         }
         "font" => split_font(&comps),
+        "background" => split_background(&comps),
+        "background-position" => {
+            let mut xs = Vec::new();
+            let mut ys = Vec::new();
+            for layer in comps.split(|c| c.as_slice() == [Token::Comma]) {
+                let (x, y) = split_position(layer)?;
+                xs.push(x);
+                ys.push(y);
+            }
+            Some(vec![
+                ("background-position-x", join_layers(xs)),
+                ("background-position-y", join_layers(ys)),
+            ])
+        }
+        "border-image" => split_border_image(&comps),
         _ => None,
     }
+}
+
+/// Component values joined by single spaces.
+fn join(parts: &[Vec<Token>]) -> Vec<Token> {
+    let mut out = Vec::new();
+    for (i, p) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push(Token::Whitespace);
+        }
+        out.extend(p.iter().cloned());
+    }
+    out
+}
+
+/// Layer values joined by commas.
+fn join_layers(layers: Vec<Vec<Token>>) -> Vec<Token> {
+    let mut out = Vec::new();
+    for (i, l) in layers.into_iter().enumerate() {
+        if i > 0 {
+            out.push(Token::Comma);
+            out.push(Token::Whitespace);
+        }
+        out.extend(l);
+    }
+    out
+}
+
+fn is_numeric(c: &[Token]) -> bool {
+    match c {
+        [Token::Number(_)] | [Token::Percentage(_)] | [Token::Dimension(..)] => true,
+        [Token::Function(f), ..] => matches!(
+            f.to_ascii_lowercase().as_str(),
+            "calc" | "min" | "max" | "clamp" | "round" | "mod" | "rem" | "abs" | "sign"
+        ),
+        _ => false,
+    }
+}
+
+fn is_slash(c: &[Token]) -> bool {
+    c == [Token::Delim('/')]
+}
+
+/// A `<bg-position>` split into its horizontal and vertical parts.
+fn split_position(comps: &[Vec<Token>]) -> Option<(Vec<Token>, Vec<Token>)> {
+    let kw = |c: &Vec<Token>| ident_of(c);
+    let horizontal = |k: &str| matches!(k, "left" | "right");
+    let vertical = |k: &str| matches!(k, "top" | "bottom");
+    let center = tokenize("center");
+    if comps.is_empty() || comps.len() > 4 {
+        return None;
+    }
+    if comps.iter().any(|c| {
+        !is_numeric(c)
+            && !matches!(
+                kw(c).as_deref(),
+                Some("left" | "right" | "top" | "bottom" | "center")
+            )
+    }) {
+        return None;
+    }
+    match comps {
+        [a] => match kw(a).as_deref() {
+            Some(k) if vertical(k) => Some((center, a.clone())),
+            Some("center") => Some((center.clone(), center)),
+            _ => Some((a.clone(), center)),
+        },
+        [a, b] => {
+            let (ka, kb) = (kw(a), kw(b));
+            let swap = ka.as_deref().is_some_and(vertical) || kb.as_deref().is_some_and(horizontal);
+            if swap {
+                if ka.is_none() || kb.is_none() {
+                    return None;
+                }
+                Some((b.clone(), a.clone()))
+            } else {
+                Some((a.clone(), b.clone()))
+            }
+        }
+        _ => {
+            // Keywords each followed by an optional offset.
+            let mut x = None;
+            let mut y = None;
+            let mut i = 0;
+            while i < comps.len() {
+                let k = kw(&comps[i])?;
+                let mut part = vec![comps[i].clone()];
+                if k != "center" && comps.get(i + 1).is_some_and(|c| is_numeric(c)) {
+                    part.push(comps[i + 1].clone());
+                    i += 1;
+                }
+                let value = join(&part);
+                if horizontal(&k) {
+                    x = Some(value);
+                } else if vertical(&k) {
+                    y = Some(value);
+                } else if x.is_none() {
+                    x = Some(value);
+                } else {
+                    y = Some(value);
+                }
+                i += 1;
+            }
+            Some((x.unwrap_or_else(|| center.clone()), y.unwrap_or(center)))
+        }
+    }
+}
+
+/// `background`: comma-separated layers of `<bg-image> || <bg-position>
+/// [ / <bg-size> ]? || <repeat-style> || <attachment> || <visual-box> ||
+/// <visual-box>`, the last one with a `<'background-color'>` too
+/// (css-backgrounds-3 §3.10).
+fn split_background(comps: &[Vec<Token>]) -> Option<Vec<(&'static str, Vec<Token>)>> {
+    let layers: Vec<&[Vec<Token>]> = comps.split(|c| c.as_slice() == [Token::Comma]).collect();
+    let n = layers.len();
+    let mut lists: [Vec<Vec<Token>>; 8] = Default::default();
+    let mut color = None;
+    for (li, layer) in layers.iter().enumerate() {
+        let mut image = None;
+        let mut position: Option<(Vec<Token>, Vec<Token>)> = None;
+        let mut size = None;
+        let mut repeat: Option<Vec<Vec<Token>>> = None;
+        let mut attachment = None;
+        let mut boxes: Vec<Vec<Token>> = Vec::new();
+        let mut i = 0;
+        while i < layer.len() {
+            let c = &layer[i];
+            let k = ident_of(c);
+            let is_pos = |c: &Vec<Token>| {
+                is_numeric(c)
+                    || matches!(
+                        ident_of(c).as_deref(),
+                        Some("left" | "right" | "top" | "bottom" | "center")
+                    )
+            };
+            if is_pos(c) && position.is_none() {
+                let start = i;
+                while i < layer.len() && is_pos(&layer[i]) && i - start < 4 {
+                    i += 1;
+                }
+                position = Some(split_position(&layer[start..i])?);
+                if i < layer.len() && is_slash(&layer[i]) {
+                    i += 1;
+                    let start = i;
+                    while i < layer.len()
+                        && i - start < 2
+                        && (is_numeric(&layer[i])
+                            || matches!(
+                                ident_of(&layer[i]).as_deref(),
+                                Some("auto" | "cover" | "contain")
+                            ))
+                    {
+                        i += 1;
+                    }
+                    if i == start {
+                        return None;
+                    }
+                    size = Some(join(&layer[start..i]));
+                }
+                continue;
+            }
+            match k.as_deref() {
+                Some("repeat-x" | "repeat-y") if repeat.is_none() => {
+                    repeat = Some(vec![c.clone()]);
+                }
+                Some("repeat" | "space" | "round" | "no-repeat") if repeat.is_none() => {
+                    let mut r = vec![c.clone()];
+                    if let Some(next) = layer.get(i + 1) {
+                        if matches!(
+                            ident_of(next).as_deref(),
+                            Some("repeat" | "space" | "round" | "no-repeat")
+                        ) {
+                            r.push(next.clone());
+                            i += 1;
+                        }
+                    }
+                    repeat = Some(r);
+                }
+                Some("scroll" | "fixed" | "local") if attachment.is_none() => {
+                    attachment = Some(c.clone());
+                }
+                Some("border-box" | "padding-box" | "content-box") if boxes.len() < 2 => {
+                    boxes.push(c.clone());
+                }
+                Some("text" | "border-area") if boxes.len() == 1 => boxes.push(c.clone()),
+                _ if image.is_none() && matches_longhand("background-image", c) => {
+                    image = Some(c.clone());
+                }
+                _ if li == n - 1 && color.is_none() && matches_longhand("background-color", c) => {
+                    color = Some(c.clone());
+                }
+                _ => return None,
+            }
+            i += 1;
+        }
+        let (px, py) = position.unwrap_or_else(|| (tokenize("0%"), tokenize("0%")));
+        let (origin, clip) = match boxes.as_slice() {
+            [a] => (a.clone(), a.clone()),
+            [a, b] => (a.clone(), b.clone()),
+            _ => (tokenize("padding-box"), tokenize("border-box")),
+        };
+        let values = [
+            image.unwrap_or_else(|| tokenize("none")),
+            px,
+            py,
+            size.unwrap_or_else(|| tokenize("auto")),
+            repeat.map_or_else(|| tokenize("repeat"), |r| join(&r)),
+            attachment.unwrap_or_else(|| tokenize("scroll")),
+            origin,
+            clip,
+        ];
+        for (list, v) in lists.iter_mut().zip(values) {
+            list.push(v);
+        }
+    }
+    let names = [
+        "background-image",
+        "background-position-x",
+        "background-position-y",
+        "background-size",
+        "background-repeat",
+        "background-attachment",
+        "background-origin",
+        "background-clip",
+    ];
+    let mut set: Vec<(&'static str, Vec<Token>)> = names
+        .into_iter()
+        .zip(lists)
+        .map(|(name, l)| (name, join_layers(l)))
+        .collect();
+    set.push((
+        "background-color",
+        color.unwrap_or_else(|| tokenize("transparent")),
+    ));
+    Some(with_initials("background", set))
+}
+
+/// `border-image`: `<'border-image-source'> || <'border-image-slice'>
+/// [ / <'border-image-width'> | / <'border-image-width'>? /
+/// <'border-image-outset'> ]? || <'border-image-repeat'>`.
+fn split_border_image(comps: &[Vec<Token>]) -> Option<Vec<(&'static str, Vec<Token>)>> {
+    let mut source = None;
+    let mut slice: Option<Vec<Vec<Token>>> = None;
+    let mut width = None;
+    let mut outset = None;
+    let mut repeat: Option<Vec<Vec<Token>>> = None;
+    let mut i = 0;
+    let is_slice = |c: &Vec<Token>| {
+        matches!(c.as_slice(), [Token::Number(_)] | [Token::Percentage(_)])
+            || ident_of(c).as_deref() == Some("fill")
+    };
+    while i < comps.len() {
+        let c = &comps[i];
+        if is_slice(c) && slice.is_none() {
+            let mut parts = Vec::new();
+            while i < comps.len() && is_slice(&comps[i]) && parts.len() < 5 {
+                parts.push(comps[i].clone());
+                i += 1;
+            }
+            slice = Some(parts);
+            // `/ width`, `/ width / outset` or `/ / outset`.
+            if i < comps.len() && is_slash(&comps[i]) {
+                i += 1;
+                let start = i;
+                while i < comps.len()
+                    && i - start < 4
+                    && (is_numeric(&comps[i]) || ident_of(&comps[i]).as_deref() == Some("auto"))
+                {
+                    i += 1;
+                }
+                if i > start {
+                    width = Some(join(&comps[start..i]));
+                }
+                if i < comps.len() && is_slash(&comps[i]) {
+                    i += 1;
+                    let start = i;
+                    while i < comps.len() && i - start < 4 && is_numeric(&comps[i]) {
+                        i += 1;
+                    }
+                    if i == start {
+                        return None;
+                    }
+                    outset = Some(join(&comps[start..i]));
+                } else if i == start {
+                    return None;
+                }
+            }
+            continue;
+        }
+        match ident_of(c).as_deref() {
+            Some("stretch" | "repeat" | "round" | "space") if repeat.is_none() => {
+                let mut r = vec![c.clone()];
+                if let Some(next) = comps.get(i + 1) {
+                    if matches!(
+                        ident_of(next).as_deref(),
+                        Some("stretch" | "repeat" | "round" | "space")
+                    ) {
+                        r.push(next.clone());
+                        i += 1;
+                    }
+                }
+                repeat = Some(r);
+            }
+            _ if source.is_none() && matches_longhand("border-image-source", c) => {
+                source = Some(c.clone());
+            }
+            _ => return None,
+        }
+        i += 1;
+    }
+    let mut set = Vec::new();
+    if let Some(s) = source {
+        set.push(("border-image-source", s));
+    }
+    if let Some(s) = slice {
+        set.push(("border-image-slice", join(&s)));
+    }
+    if let Some(w) = width {
+        set.push(("border-image-width", w));
+    }
+    if let Some(o) = outset {
+        set.push(("border-image-outset", o));
+    }
+    if let Some(r) = repeat {
+        set.push(("border-image-repeat", join(&r)));
+    }
+    Some(with_initials("border-image", set))
 }
 
 /// `font`: `[ <'font-style'> || <font-variant-css2> || <'font-weight'> ||

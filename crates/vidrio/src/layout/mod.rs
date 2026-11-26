@@ -21,7 +21,7 @@ pub(crate) mod linebreak;
 mod positioned;
 mod table;
 mod text;
-mod values;
+pub(crate) mod values;
 
 use std::collections::HashMap;
 
