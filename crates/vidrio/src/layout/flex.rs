@@ -115,7 +115,7 @@ impl Axes {
 
 /// An alignment keyword of css-align-3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Pos {
+pub(super) enum Pos {
     Normal,
     Stretch,
     FlexStart,
@@ -135,7 +135,7 @@ enum Pos {
 }
 
 /// A computed alignment value: its keyword and whether it is `safe`.
-fn parse_align(text: &str) -> (Pos, bool) {
+pub(super) fn parse_align(text: &str) -> (Pos, bool) {
     let mut safe = false;
     let mut last = false;
     let mut pos = Pos::Normal;

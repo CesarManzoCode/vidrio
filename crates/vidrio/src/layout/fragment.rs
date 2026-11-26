@@ -8,6 +8,7 @@
 //! they clip their content, are scroll containers (with their scrollable
 //! overflow area) and how they take part in stacking (CSS 2 §9.9).
 
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -257,6 +258,10 @@ pub struct Fragment {
     /// `object-position`, css-images-3 §5.5), in absolute coordinates
     /// (relative to the border box until the tree is absolute).
     pub object: Option<Rect>,
+    /// The grid area of an out-of-flow placeholder whose parent is a
+    /// grid container (css-grid-2 §9.1), relative to the placeholder's
+    /// own origin; it is the containing block when the grid container is.
+    pub grid_area: Option<Rect>,
 }
 
 impl Fragment {
@@ -275,6 +280,7 @@ impl Fragment {
             clip: None,
             stacking: Stacking::None,
             object: None,
+            grid_area: None,
         }
     }
 
@@ -405,9 +411,25 @@ impl Fragment {
 pub struct FragmentTree {
     /// The viewport fragment.
     pub root: Fragment,
+    /// The resolved `grid-template-columns` and `-rows` of the grid
+    /// containers (css-grid-2 §7.2.6).
+    pub grid_tracks: HashMap<NodeId, [String; 2]>,
 }
 
 impl FragmentTree {
+    /// The resolved value of `grid-template-columns` or
+    /// `grid-template-rows` of `node` when it is a laid out grid
+    /// container (`getComputedStyle` gives the computed value
+    /// otherwise).
+    pub fn grid_template(&self, node: NodeId, property: &str) -> Option<&str> {
+        let tracks = self.grid_tracks.get(&node)?;
+        match property {
+            "grid-template-columns" => Some(&tracks[0]),
+            "grid-template-rows" => Some(&tracks[1]),
+            _ => None,
+        }
+    }
+
     /// The fragments of `node`, in tree order.
     pub fn fragments_of(&self, node: NodeId) -> Vec<&Fragment> {
         self.root.fragments_of(node)

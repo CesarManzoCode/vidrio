@@ -77,7 +77,7 @@ pub(crate) fn place(ctx: &mut Ctx, boxes: &BoxNode, view: &Viewport, root: &mut 
     let mut placed = Vec::new();
     while let Some(path) = first_placeholder(root, &mut Vec::new()) {
         let ph = at(root, &path);
-        let (node, pseudo, static_rect) = (ph.node, ph.pseudo, ph.rect);
+        let (node, pseudo, static_rect, grid_area) = (ph.node, ph.pseudo, ph.rect, ph.grid_area);
         let mut chain = Vec::new();
         let found = node.and_then(|n| find_box(boxes, n, pseudo, &mut chain));
         let Some(b) = found else {
@@ -85,7 +85,15 @@ pub(crate) fn place(ctx: &mut Ctx, boxes: &BoxNode, view: &Viewport, root: &mut 
             continue;
         };
         let fixed = values::position(&b.style) == Position::Fixed;
-        let (cb, cb_rtl, inside, is_initial) = containing_block(root, &chain, fixed, icb, root_rtl);
+        let (mut cb, cb_rtl, inside, is_initial) =
+            containing_block(root, &chain, fixed, icb, root_rtl);
+        // A grid container that is the containing block of its child
+        // gives it its grid area instead (css-grid-2 §9.1).
+        if let Some(a) = grid_area {
+            if !is_initial && inside.len() == 1 {
+                cb = Rect::new(static_rect.x + a.x, static_rect.y + a.y, a.width, a.height);
+            }
+        }
         let mut frag = layout_absolute(ctx, b, cb, cb_rtl, static_rect);
         let frame = frame_at(root, &path, initial, view);
         offsets(&mut frag, frame, view);

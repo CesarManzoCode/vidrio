@@ -306,9 +306,9 @@ pub(crate) struct Builder<'a> {
     /// The body's `overflow` goes to the viewport (CSS 2 §11.1.1).
     pub body_overflow_propagated: bool,
     pub body: Option<NodeId>,
-    /// The boxes being built are children of a flex container: they are
-    /// blockified and do not float (css-display-3 §2.7, css-flexbox-1
-    /// §4).
+    /// The boxes being built are children of a flex or grid container:
+    /// they are blockified and do not float (css-display-3 §2.7,
+    /// css-flexbox-1 §4, css-grid-2 §6).
     flex_parent: bool,
 }
 
@@ -701,7 +701,7 @@ impl<'a> Builder<'a> {
         }
         let mut inner_sink = Sink::new();
         self.counters.push();
-        self.flex_parent = inner == Inner::Flex;
+        self.flex_parent = matches!(inner, Inner::Flex | Inner::Grid);
         let mut marker = None;
         if list_item {
             if let (Some(e), None) = (node, pseudo) {
@@ -756,7 +756,7 @@ impl<'a> Builder<'a> {
         };
         self.counters.pop();
         self.flex_parent = blockify;
-        let mut contents = if inner == Inner::Flex {
+        let mut contents = if matches!(inner, Inner::Flex | Inner::Grid) {
             inner_sink.finish_items(&style)
         } else {
             inner_sink.finish(&style)

@@ -1,12 +1,12 @@
 //! Layout (`vault/CONTRACT.md` §3.5): the box tree of a styled document
 //! and one pass of block and inline formatting (CSS 2 §9, §10; css-text-3;
 //! css-inline-3) that produces an immutable fragment tree in absolute
-//! coordinates, flex layout (css-flexbox-1), then positioned layout
-//! (relative, sticky, absolute and fixed boxes), overflow clips and
-//! scroll containers, and stacking. Only `writing-mode: horizontal-tb`
-//! is laid out; logical margins, paddings and insets arrive mapped to
-//! physical ones by the cascade. Tables and grid containers are laid
-//! out as block flow roots until their own layout modes exist.
+//! coordinates, flex layout (css-flexbox-1), grid layout (css-grid-2),
+//! then positioned layout (relative, sticky, absolute and fixed boxes),
+//! overflow clips and scroll containers, and stacking. Only
+//! `writing-mode: horizontal-tb` is laid out; logical margins, paddings
+//! and insets arrive mapped to physical ones by the cascade. Tables are
+//! laid out as block flow roots until their own layout mode exists.
 
 pub(crate) mod bidi;
 mod block;
@@ -15,11 +15,14 @@ mod content;
 mod flex;
 mod float;
 pub mod fragment;
+mod grid;
 mod inline;
 pub(crate) mod linebreak;
 mod positioned;
 mod text;
 mod values;
+
+use std::collections::HashMap;
 
 use vgfx::font::system::WebFace;
 
@@ -31,6 +34,12 @@ use fragment::{Fragment, FragmentKind, FragmentTree, Overflow, Rect};
 /// What one layout pass shares.
 pub(crate) struct Ctx {
     pub fonts: text::FontContext,
+    /// The tracks a grid passes to a subgrid item before laying it out,
+    /// by the address of the item's box.
+    pub subgrids: HashMap<usize, grid::Inherit>,
+    /// The resolved `grid-template-columns` and `-rows` of every grid
+    /// container laid out (css-grid-2 §7.2.6).
+    pub grid_tracks: HashMap<NodeId, [String; 2]>,
 }
 
 /// The inputs of a layout pass besides the document and its styles.
@@ -51,6 +60,8 @@ pub struct Options<'a> {
 pub fn layout(doc: &Document, styles: &StyleMap, options: Options) -> FragmentTree {
     let mut ctx = Ctx {
         fonts: text::FontContext::new(options.web_fonts, options.system_fonts),
+        subgrids: HashMap::new(),
+        grid_tracks: HashMap::new(),
     };
     let (w, h) = options.viewport;
     let mut viewport = Fragment::new(FragmentKind::Viewport, initial_style());
@@ -95,5 +106,8 @@ pub fn layout(doc: &Document, styles: &StyleMap, options: Options) -> FragmentTr
         };
         positioned::place(&mut ctx, root, &view, &mut viewport);
     }
-    FragmentTree { root: viewport }
+    FragmentTree {
+        root: viewport,
+        grid_tracks: ctx.grid_tracks,
+    }
 }
