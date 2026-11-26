@@ -6,6 +6,10 @@
 //! them, `::first-letter` boxes, replaced elements (`img`, `iframe`,
 //! `video`, `canvas`, `embed`, checkboxes and radio buttons) and the
 //! other form controls as inline-block containers of their text.
+//! Tables get the anonymous objects of css-tables-3 §3.3 (CSS 2 §17.2.1):
+//! a table wrapper box around the table grid box and its captions, and
+//! anonymous rows, cells, row groups and tables around misparented table
+//! parts.
 //!
 //! Inline content is stored flat: text, atomic inlines, floats and
 //! out-of-flow boxes, with markers where inline boxes open and close.
@@ -54,6 +58,277 @@ pub(crate) struct Container {
     pub control: Option<ControlSize>,
     /// Lines never wrap (single-line form controls).
     pub single_line: bool,
+    /// The part of a table the box is.
+    pub table: TableRole,
+}
+
+/// The kind of a row group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GroupKind {
+    Header,
+    Body,
+    Footer,
+}
+
+/// The part of a table a block container is (css-tables-3 §2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum TableRole {
+    /// Not a table part.
+    #[default]
+    None,
+    /// The table wrapper box: the table grid box and the captions.
+    Wrapper,
+    /// The table grid box.
+    Table,
+    RowGroup(GroupKind),
+    Row,
+    /// A cell; a `rowspan` of 0 spans to the end of the row group.
+    Cell {
+        colspan: usize,
+        rowspan: usize,
+    },
+    Column {
+        span: usize,
+    },
+    ColumnGroup {
+        span: usize,
+    },
+    Caption,
+}
+
+impl TableRole {
+    /// A table-internal box or a caption: one that needs a table parent.
+    fn is_internal(self) -> bool {
+        !matches!(
+            self,
+            TableRole::None | TableRole::Wrapper | TableRole::Table
+        )
+    }
+}
+
+/// The table role `display` gives a box (spans of 1).
+pub(crate) fn table_role(style: &ComputedStyle) -> TableRole {
+    match kw(style, "display").as_str() {
+        "table-row-group" => TableRole::RowGroup(GroupKind::Body),
+        "table-header-group" => TableRole::RowGroup(GroupKind::Header),
+        "table-footer-group" => TableRole::RowGroup(GroupKind::Footer),
+        "table-row" => TableRole::Row,
+        "table-cell" => TableRole::Cell {
+            colspan: 1,
+            rowspan: 1,
+        },
+        "table-column" => TableRole::Column { span: 1 },
+        "table-column-group" => TableRole::ColumnGroup { span: 1 },
+        "table-caption" => TableRole::Caption,
+        _ => TableRole::None,
+    }
+}
+
+/// The table role of a box.
+pub(crate) fn role_of(b: &BoxNode) -> TableRole {
+    match &b.kind {
+        BoxKind::Container(c) => c.table,
+        BoxKind::Replaced(_) => TableRole::None,
+    }
+}
+
+/// The value of an HTML non-negative integer attribute (HTML §2.3.4.2).
+fn html_uint(s: &str) -> Option<u64> {
+    let s = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let s = s.strip_prefix('+').unwrap_or(s);
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    Some(digits.parse::<u64>().unwrap_or(u64::MAX))
+}
+
+/// The properties of a table element that go to its table wrapper box;
+/// the table grid box keeps the others (css-tables-3 §3.1).
+const WRAPPER_PROPERTIES: &[&str] = &[
+    "display",
+    "position",
+    "float",
+    "clear",
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "z-index",
+    "margin-top",
+    "margin-right",
+    "margin-bottom",
+    "margin-left",
+    "transform",
+    "transform-origin",
+    "translate",
+    "rotate",
+    "scale",
+    "align-self",
+    "justify-self",
+    "order",
+    "flex-grow",
+    "flex-shrink",
+    "flex-basis",
+    "grid-row-start",
+    "grid-row-end",
+    "grid-column-start",
+    "grid-column-end",
+];
+
+/// A new anonymous box with table role `role` and block children,
+/// inside a box with style `parent`.
+fn anonymous_table_box(parent: &ComputedStyle, role: TableRole, children: Vec<BoxNode>) -> BoxNode {
+    BoxNode {
+        style: anonymous_style(parent),
+        node: None,
+        pseudo: None,
+        kind: BoxKind::Container(Container {
+            contents: Contents::Blocks(children),
+            anonymous: true,
+            bfc_root: matches!(
+                role,
+                TableRole::Wrapper | TableRole::Table | TableRole::Cell { .. } | TableRole::Caption
+            ),
+            inline_level: false,
+            marker: None,
+            first_line: None,
+            control: None,
+            single_line: false,
+            table: role,
+        }),
+    }
+}
+
+/// The children of a row: cells and out-of-flow boxes stay, every run
+/// of other boxes goes into an anonymous cell.
+fn fix_row(children: Vec<BoxNode>, parent: &ComputedStyle) -> Vec<BoxNode> {
+    let mut out = Vec::new();
+    let mut run: Vec<BoxNode> = Vec::new();
+    let flush = |run: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
+        if !run.is_empty() {
+            let kids = wrap_orphans(std::mem::take(run), parent);
+            out.push(anonymous_table_box(
+                parent,
+                TableRole::Cell {
+                    colspan: 1,
+                    rowspan: 1,
+                },
+                kids,
+            ));
+        }
+    };
+    for ch in children {
+        if matches!(role_of(&ch), TableRole::Cell { .. }) || values::out_of_flow(&ch.style) {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        } else {
+            run.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+/// The children of a row group: rows and out-of-flow boxes stay, every
+/// run of other boxes goes into an anonymous row.
+fn fix_row_group(children: Vec<BoxNode>, parent: &ComputedStyle) -> Vec<BoxNode> {
+    let mut out = Vec::new();
+    let mut run: Vec<BoxNode> = Vec::new();
+    let flush = |run: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
+        if !run.is_empty() {
+            let cells = fix_row(std::mem::take(run), parent);
+            out.push(anonymous_table_box(parent, TableRole::Row, cells));
+        }
+    };
+    for ch in children {
+        if role_of(&ch) == TableRole::Row || values::out_of_flow(&ch.style) {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        } else {
+            run.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+/// The children of a table: its captions, and the children of its
+/// table grid box (column groups, columns, row groups and out-of-flow
+/// boxes), with every run of rows in an anonymous row group and every
+/// run of other boxes in an anonymous row.
+fn fix_table(children: Vec<BoxNode>, parent: &ComputedStyle) -> (Vec<BoxNode>, Vec<BoxNode>) {
+    let mut captions = Vec::new();
+    let mut out = Vec::new();
+    let mut rows: Vec<BoxNode> = Vec::new();
+    let mut cells: Vec<BoxNode> = Vec::new();
+    let flush_cells = |cells: &mut Vec<BoxNode>, rows: &mut Vec<BoxNode>| {
+        if !cells.is_empty() {
+            let kids = fix_row(std::mem::take(cells), parent);
+            rows.push(anonymous_table_box(parent, TableRole::Row, kids));
+        }
+    };
+    let flush_rows = |rows: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
+        if !rows.is_empty() {
+            out.push(anonymous_table_box(
+                parent,
+                TableRole::RowGroup(GroupKind::Body),
+                std::mem::take(rows),
+            ));
+        }
+    };
+    for ch in children {
+        if values::out_of_flow(&ch.style) {
+            flush_cells(&mut cells, &mut rows);
+            flush_rows(&mut rows, &mut out);
+            out.push(ch);
+            continue;
+        }
+        match role_of(&ch) {
+            TableRole::Caption => captions.push(ch),
+            TableRole::Row => {
+                flush_cells(&mut cells, &mut rows);
+                rows.push(ch);
+            }
+            TableRole::RowGroup(_) | TableRole::Column { .. } | TableRole::ColumnGroup { .. } => {
+                flush_cells(&mut cells, &mut rows);
+                flush_rows(&mut rows, &mut out);
+                out.push(ch);
+            }
+            _ => cells.push(ch),
+        }
+    }
+    flush_cells(&mut cells, &mut rows);
+    flush_rows(&mut rows, &mut out);
+    (captions, out)
+}
+
+/// Block children of a box that is not a table part with every run of
+/// table-internal boxes and captions in an anonymous table (css-tables-3
+/// §3.3, step 3).
+fn wrap_orphans(children: Vec<BoxNode>, parent: &ComputedStyle) -> Vec<BoxNode> {
+    if !children.iter().any(|b| role_of(b).is_internal()) {
+        return children;
+    }
+    let mut out = Vec::new();
+    let mut run: Vec<BoxNode> = Vec::new();
+    let flush = |run: &mut Vec<BoxNode>, out: &mut Vec<BoxNode>| {
+        if !run.is_empty() {
+            let (mut captions, parts) = fix_table(std::mem::take(run), parent);
+            captions.push(anonymous_table_box(parent, TableRole::Table, parts));
+            out.push(anonymous_table_box(parent, TableRole::Wrapper, captions));
+        }
+    };
+    for ch in children {
+        if role_of(&ch).is_internal() {
+            run.push(ch);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -261,6 +536,7 @@ impl Sink {
                     first_line: None,
                     control: None,
                     single_line: false,
+                    table: TableRole::None,
                 }),
             });
         } else {
@@ -685,6 +961,13 @@ impl<'a> Builder<'a> {
             .filter(|_| pseudo.is_none())
             .and_then(|e| self.local_name(e));
         let control = self.control(node.filter(|_| pseudo.is_none()), local.as_deref());
+        // Floats, out-of-flow boxes and flex and grid items are blockified
+        // (css-display-3 §2.7): they are not table parts.
+        let role = if blockify || floats || oof || control.is_some() {
+            TableRole::None
+        } else {
+            self.with_spans(table_role(&style), node, pseudo, local.as_deref())
+        };
         if outer == Outer::Inline && inner == Inner::Flow && !floats && !oof && control.is_none() {
             sink.open(InlineBox {
                 style: style.clone(),
@@ -738,6 +1021,7 @@ impl<'a> Builder<'a> {
                                 first_line: None,
                                 control: None,
                                 single_line: true,
+                                table: TableRole::None,
                             }),
                         }));
                     }
@@ -750,18 +1034,55 @@ impl<'a> Builder<'a> {
                 (c.size, c.single_line)
             }
             None => {
-                self.kids(&kids, &style, &mut inner_sink);
+                // Columns render none of their children.
+                if !matches!(role, TableRole::Column { .. }) {
+                    self.kids(&kids, &style, &mut inner_sink);
+                }
                 (None, false)
             }
         };
         self.counters.pop();
         self.flex_parent = blockify;
-        let mut contents = if matches!(inner, Inner::Flex | Inner::Grid) {
+        // Inside tables, row groups and rows, white space between parts
+        // is not rendered and other inline content becomes a block that
+        // the fixup wraps (css-tables-3 §3.3, steps 1 and 2).
+        let tabular = inner == Inner::Table
+            || matches!(
+                role,
+                TableRole::RowGroup(_) | TableRole::Row | TableRole::ColumnGroup { .. }
+            );
+        let contents = if matches!(inner, Inner::Flex | Inner::Grid) || tabular {
             inner_sink.finish_items(&style)
         } else {
             inner_sink.finish(&style)
         };
-        if let (Some(e), None) = (node, pseudo) {
+        let mut contents = match (role, contents) {
+            (TableRole::Column { .. }, _) => Contents::Blocks(Vec::new()),
+            (TableRole::ColumnGroup { .. }, Contents::Blocks(v)) => Contents::Blocks(
+                v.into_iter()
+                    .filter(|b| matches!(role_of(b), TableRole::Column { .. }))
+                    .collect(),
+            ),
+            (TableRole::RowGroup(_), Contents::Blocks(v)) => {
+                Contents::Blocks(fix_row_group(v, &style))
+            }
+            (TableRole::Row, Contents::Blocks(v)) => Contents::Blocks(fix_row(v, &style)),
+            (_, Contents::Blocks(v)) if inner != Inner::Table => {
+                Contents::Blocks(wrap_orphans(v, &style))
+            }
+            (_, c) => c,
+        };
+        if inner == Inner::Table {
+            let children = match contents {
+                Contents::Blocks(v) => v,
+                Contents::Inline(_) => Vec::new(),
+            };
+            let inline_level = outer == Outer::Inline;
+            let b = table_wrapper(style.clone(), node, pseudo, children, inline_level);
+            self.attach(b, &style, inline_level, sink);
+            return;
+        }
+        if let (Some(e), None, false) = (node, pseudo, tabular) {
             if let Some(fl) = self.styles.pseudo(e, Pseudo::FirstLetter).cloned() {
                 first_letter(&mut contents, fl, e);
             }
@@ -775,6 +1096,7 @@ impl<'a> Builder<'a> {
             values::overflow_establishes_bfc(&style) && !(is_body && self.body_overflow_propagated);
         let inline_level = outer == Outer::Inline;
         let bfc_root = inner != Inner::Flow
+            || matches!(role, TableRole::Cell { .. } | TableRole::Caption)
             || overflow_bfc
             || floats
             || oof
@@ -794,9 +1116,44 @@ impl<'a> Builder<'a> {
                 first_line,
                 control: control_size,
                 single_line,
+                table: role,
             }),
         };
         self.attach(b, &style, inline_level, sink);
+    }
+
+    /// `role` with the spans of HTML table elements: `colspan` and
+    /// `rowspan` of `td` and `th`, `span` of `col` and `colgroup` (HTML
+    /// §4.9.3, §4.9.4, §4.9.11).
+    fn with_spans(
+        &self,
+        role: TableRole,
+        node: Option<NodeId>,
+        pseudo: Option<Pseudo>,
+        local: Option<&str>,
+    ) -> TableRole {
+        let (Some(e), None) = (node, pseudo) else {
+            return role;
+        };
+        let uint = |n: &str| self.attr(e, n).as_deref().and_then(html_uint);
+        let span = || match uint("span") {
+            Some(v) if v > 0 => v.min(1000) as usize,
+            _ => 1,
+        };
+        match (role, local) {
+            (TableRole::Cell { .. }, Some("td" | "th")) => TableRole::Cell {
+                colspan: match uint("colspan") {
+                    Some(v) if v > 0 => v.min(1000) as usize,
+                    _ => 1,
+                },
+                rowspan: uint("rowspan").map_or(1, |v| v.min(65534) as usize),
+            },
+            (TableRole::Column { .. }, Some("col")) => TableRole::Column { span: span() },
+            (TableRole::ColumnGroup { .. }, Some("colgroup")) => {
+                TableRole::ColumnGroup { span: span() }
+            }
+            _ => role,
+        }
     }
 
     fn kids(&mut self, kids: &Kids, style: &Rc<ComputedStyle>, sink: &mut Sink) {
@@ -948,6 +1305,56 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// The table wrapper box of a table element (or pseudo-element) with
+/// style `style` and block children `children`: it takes the table's
+/// position, float, margins and the properties of its place in a flex
+/// or grid container, and holds the captions and the table grid box,
+/// which keeps the rest (css-tables-3 §3.1).
+fn table_wrapper(
+    style: Rc<ComputedStyle>,
+    node: Option<NodeId>,
+    pseudo: Option<Pseudo>,
+    children: Vec<BoxNode>,
+    inline_level: bool,
+) -> BoxNode {
+    let (mut kids, parts) = fix_table(children, &style);
+    let grid_style = Rc::new(style.with_initial(&WRAPPER_PROPERTIES[1..]));
+    kids.push(BoxNode {
+        style: grid_style,
+        node,
+        pseudo,
+        kind: BoxKind::Container(Container {
+            contents: Contents::Blocks(parts),
+            anonymous: false,
+            bfc_root: true,
+            inline_level: false,
+            marker: None,
+            first_line: None,
+            control: None,
+            single_line: false,
+            table: TableRole::Table,
+        }),
+    });
+    let wrapper_style =
+        Rc::new(anonymous_style(&style).with_reset_from(&style, WRAPPER_PROPERTIES));
+    BoxNode {
+        style: wrapper_style,
+        node,
+        pseudo,
+        kind: BoxKind::Container(Container {
+            contents: Contents::Blocks(kids),
+            anonymous: false,
+            bfc_root: true,
+            inline_level,
+            marker: None,
+            first_line: None,
+            control: None,
+            single_line: false,
+            table: TableRole::Wrapper,
+        }),
+    }
+}
+
 /// The children a box gets.
 enum Kids {
     Element(NodeId),
@@ -1068,6 +1475,7 @@ fn first_letter(contents: &mut Contents, style: Rc<ComputedStyle>, e: NodeId) {
                 first_line: None,
                 control: None,
                 single_line: false,
+                table: TableRole::None,
             }),
         }));
     } else {

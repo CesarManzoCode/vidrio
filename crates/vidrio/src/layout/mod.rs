@@ -2,11 +2,11 @@
 //! and one pass of block and inline formatting (CSS 2 §9, §10; css-text-3;
 //! css-inline-3) that produces an immutable fragment tree in absolute
 //! coordinates, flex layout (css-flexbox-1), grid layout (css-grid-2),
-//! then positioned layout (relative, sticky, absolute and fixed boxes),
-//! overflow clips and scroll containers, and stacking. Only
+//! table layout (css-tables-3, CSS 2 §17), then positioned layout
+//! (relative, sticky, absolute and fixed boxes), overflow clips and
+//! scroll containers, and stacking. Only
 //! `writing-mode: horizontal-tb` is laid out; logical margins, paddings
-//! and insets arrive mapped to physical ones by the cascade. Tables are
-//! laid out as block flow roots until their own layout mode exists.
+//! and insets arrive mapped to physical ones by the cascade.
 
 pub(crate) mod bidi;
 mod block;
@@ -19,6 +19,7 @@ mod grid;
 mod inline;
 pub(crate) mod linebreak;
 mod positioned;
+mod table;
 mod text;
 mod values;
 

@@ -28,6 +28,7 @@ use super::float::FloatContext;
 use super::fragment::{Fragment, FragmentKind, Rect, Sides};
 use super::grid;
 use super::inline;
+use super::table;
 use super::values::{self, Float, Margins, Size};
 
 const EPS: f64 = 1e-7;
@@ -155,6 +156,10 @@ pub(super) fn specified_width(
     bp_h: f64,
     avail: f64,
 ) -> Option<f64> {
+    // A table wrapper box is as wide as its table (css-tables-3 §3.9.2).
+    if table::is_wrapper(b) {
+        return Some(table::used_width(ctx, b, cbw, avail));
+    }
     let s = &b.style;
     let border_box = values::border_box_sizing(s);
     let content = |w: f64| {
@@ -412,6 +417,9 @@ pub(crate) fn intrinsic(ctx: &mut Ctx, b: &BoxNode) -> (f64, f64) {
             if values::size_contained(&b.style).0 {
                 let w = values::contain_intrinsic(&b.style, "contain-intrinsic-width");
                 return (w, w);
+            }
+            if table::is_wrapper(b) {
+                return table::intrinsic(ctx, b);
             }
             if flex::is_flex(&b.style) {
                 return flex::intrinsic(ctx, c, &b.style);
@@ -686,6 +694,9 @@ pub(super) fn layout_independent(
     w: f64,
     cbh: Option<f64>,
 ) -> Independent {
+    if table::is_wrapper(b) {
+        return table::layout(ctx, b, w, cbh);
+    }
     if flex::is_flex(&b.style) {
         let mut inner = flex::layout(ctx, b, c, w, cbh);
         inner.height = contained_height(&b.style, inner.height);
@@ -811,7 +822,13 @@ pub(crate) fn layout_float(ctx: &mut Ctx, b: &BoxNode, cb: Cb) -> (Fragment, f64
 pub(crate) fn layout_atomic(ctx: &mut Ctx, b: &BoxNode, cb: Cb) -> (Fragment, f64, f64, f64) {
     let (frag, mw, mh) = layout_detached(ctx, b, cb, FragmentKind::InlineBlock);
     let mut baseline = mh;
-    if matches!(frag.kind, FragmentKind::InlineBlock)
+    if table::is_wrapper(b) {
+        // An inline table sits on the baseline of its first row (CSS 2
+        // §10.8.1).
+        if let Some(bl) = table::baseline(&frag) {
+            baseline = frag.rect.y + bl;
+        }
+    } else if matches!(frag.kind, FragmentKind::InlineBlock)
         && values::kw(&b.style, "overflow-x") == "visible"
     {
         if let Some(bl) = find_baseline(&frag.children, true) {
@@ -1345,6 +1362,24 @@ pub(super) fn place_marker(ctx: &mut Ctx, marker: &BoxNode, item: &mut Fragment,
     };
     mf.translate(x, line_baseline - baseline);
     item.children.push(mf);
+}
+
+/// Lays out block-level box `b` alone at the top of a new block
+/// formatting context of width `cbw` (a table caption): its fragment,
+/// placed at its margins, and the height of its margin box.
+pub(super) fn layout_alone(ctx: &mut Ctx, b: &BoxNode, cbw: f64) -> (Fragment, f64) {
+    let cb = Cb {
+        width: cbw,
+        height: None,
+    };
+    let mut flow = Flow::new(0.0);
+    let mut floats = FloatContext::default();
+    let frag = layout_in_flow(ctx, b, cb, 0.0, &mut flow, &mut floats, None);
+    let mut height = flow.hypothetical();
+    if let Some(fb) = floats.bottom() {
+        height = height.max(fb);
+    }
+    (frag, height)
 }
 
 /// Lays out the root element's box in the initial containing block.

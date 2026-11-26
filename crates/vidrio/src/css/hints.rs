@@ -316,6 +316,11 @@ pub fn presentational_hints(doc: &Document, element: NodeId) -> DeclarationBlock
                 }
             }
         }
+        "col" => {
+            if let Some(d) = a("width").and_then(parse_nonzero_dimension) {
+                h.set("width", &d.to_css());
+            }
+        }
         "caption" => match a("align").map(str::to_ascii_lowercase).as_deref() {
             Some("bottom") => h.set("caption-side", "bottom"),
             Some("top") => h.set("caption-side", "top"),
@@ -515,6 +520,12 @@ mod tests {
         let block = presentational_hints(&doc, img);
         assert_eq!(block.property_value("width"), "100px");
         assert_eq!(block.property_value("border-top-width"), "2px");
+        let col = doc.create_html_element("col");
+        doc.set_attribute(col, "width", "25%");
+        assert_eq!(
+            presentational_hints(&doc, col).property_value("width"),
+            "25%"
+        );
         let font = doc.create_html_element("font");
         doc.set_attribute(font, "size", "+2");
         assert_eq!(

@@ -188,8 +188,7 @@ pub(crate) enum Outer {
     Inline,
 }
 
-/// The inner display type. Tables are laid out as flow roots until
-/// their own layout mode exists.
+/// The inner display type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inner {
     Flow,
@@ -226,7 +225,8 @@ pub(crate) fn display(style: &ComputedStyle) -> Display {
         ["inline-table"] => return b(Outer::Inline, Inner::Table),
         ["inline-flex"] => return b(Outer::Inline, Inner::Flex),
         ["inline-grid"] => return b(Outer::Inline, Inner::Grid),
-        // Table-internal boxes (until table layout) and ruby boxes.
+        // Table-internal boxes (the box tree gives them their table role)
+        // and ruby boxes.
         [w] if w.starts_with("table-") => return b(Outer::Block, Inner::Flow),
         ["ruby-base"] | ["ruby-text"] | ["ruby-base-container"] | ["ruby-text-container"] => {
             return b(Outer::Inline, Inner::Flow);

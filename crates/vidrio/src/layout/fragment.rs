@@ -103,6 +103,40 @@ impl Sides {
     }
 }
 
+/// A physical side of a box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+impl Side {
+    /// The side's name in the `border-*` longhands.
+    pub fn name(self) -> &'static str {
+        match self {
+            Side::Top => "top",
+            Side::Right => "right",
+            Side::Bottom => "bottom",
+            Side::Left => "left",
+        }
+    }
+}
+
+/// One side of a box in the collapsing border model (CSS 2 §17.6.2):
+/// the border that won the conflict on that edge. `width` is the whole
+/// border, centered on the grid line (half of it lies outside the border
+/// box); `source` is the style of the box the border comes from and
+/// `side` the side of that box whose `border-*-style` and
+/// `border-*-color` are painted.
+#[derive(Clone, Debug)]
+pub struct CollapsedSide {
+    pub width: f64,
+    pub source: Option<Rc<ComputedStyle>>,
+    pub side: Side,
+}
+
 /// What a replaced fragment shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplacedKind {
@@ -262,6 +296,14 @@ pub struct Fragment {
     /// grid container (css-grid-2 §9.1), relative to the placeholder's
     /// own origin; it is the containing block when the grid container is.
     pub grid_area: Option<Rect>,
+    /// The borders a table cell (or a table, at its outer edges) paints
+    /// in the collapsing border model, in the order top, right, bottom,
+    /// left, instead of the ones of its style.
+    pub collapsed_borders: Option<Box<[CollapsedSide; 4]>>,
+    /// A table cell without content under `empty-cells: hide` in the
+    /// separated borders model: its borders and background are not
+    /// painted (CSS 2 §17.6.1.1).
+    pub empty_hidden: bool,
 }
 
 impl Fragment {
@@ -281,6 +323,8 @@ impl Fragment {
             stacking: Stacking::None,
             object: None,
             grid_area: None,
+            collapsed_borders: None,
+            empty_hidden: false,
         }
     }
 

@@ -141,6 +141,27 @@ impl ComputedStyle {
     pub fn rtl(&self) -> bool {
         self.raw("direction").is_some_and(|v| v.text == "rtl")
     }
+
+    /// A copy whose non-inherited longhands `names` take their computed
+    /// values from `from` (unknown and inherited names are ignored).
+    pub(crate) fn with_reset_from(&self, from: &ComputedStyle, names: &[&str]) -> ComputedStyle {
+        let mut reset = (*self.reset).clone();
+        for name in names {
+            if let Some((false, s)) = slot(name) {
+                reset.0[s] = from.reset.0[s].clone();
+            }
+        }
+        ComputedStyle {
+            reset: Rc::new(reset),
+            ..self.clone()
+        }
+    }
+
+    /// A copy with the non-inherited longhands `names` at their initial
+    /// values.
+    pub(crate) fn with_initial(&self, names: &[&str]) -> ComputedStyle {
+        self.with_reset_from(&initial_style(), names)
+    }
 }
 
 fn color_of(v: &CValue) -> Option<Absolute> {
@@ -894,6 +915,22 @@ mod tests {
         assert_eq!(t.text("background-color"), "rgb(255, 0, 0)");
         let h = computed_style(&doc, by_id(&doc, "h")).expect("a style");
         assert_eq!(h.text("display"), "none");
+    }
+
+    #[test]
+    fn reset_longhands_copy_between_styles() {
+        let doc = doc_of("<table id=t style='float: left; margin-top: 3px; color: red'></table>");
+        let t = computed_style(&doc, by_id(&doc, "t")).expect("a style");
+        let initial = initial_style();
+        let moved = initial.with_reset_from(&t, &["float", "margin-top", "color"]);
+        assert_eq!(moved.text("float"), "left");
+        assert_eq!(moved.text("margin-top"), "3px");
+        // `color` is inherited: it is not copied.
+        assert_eq!(moved.text("color"), initial.text("color"));
+        let cleared = t.with_initial(&["float", "margin-top"]);
+        assert_eq!(cleared.text("float"), "none");
+        assert_eq!(cleared.text("margin-top"), "0px");
+        assert_eq!(cleared.text("display"), "table");
     }
 
     #[test]
