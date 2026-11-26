@@ -9,6 +9,7 @@ pub mod encoding;
 pub mod fetch;
 pub mod generated;
 pub mod html;
+pub mod layout;
 pub mod log;
 pub mod mime;
 pub mod paint;

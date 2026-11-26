@@ -220,3 +220,32 @@ fn currentcolor_computes_against_the_element() {
     assert_eq!(value(&d, "b", "border-left-width"), "0px");
     assert_eq!(value(&d, "a", "border-top-width"), "3px");
 }
+
+#[test]
+fn font_white_space_and_text_wrap_reach_their_longhands() {
+    let d = doc(concat!(
+        "<style>#f { font: italic bold 20px/2 Ahem, serif }",
+        "#g { font: 10px monospace; font-weight: 300 }",
+        "#w { white-space: pre } #x { white-space: pre-line }",
+        "#t { text-wrap: nowrap balance } #bad { font: 10px; white-space: pre pre }</style>",
+        "<div id=f></div><div id=g></div><div id=w></div><div id=x></div>",
+        "<div id=t></div><div id=bad></div>"
+    ));
+    assert_eq!(value(&d, "f", "font-size"), "20px");
+    assert_eq!(value(&d, "f", "line-height"), "2");
+    assert_eq!(value(&d, "f", "font-weight"), "700");
+    assert_eq!(value(&d, "f", "font-style"), "italic");
+    assert_eq!(value(&d, "f", "font-family"), "Ahem, serif");
+    assert_eq!(value(&d, "g", "font-size"), "10px");
+    assert_eq!(value(&d, "g", "font-weight"), "300");
+    assert_eq!(value(&d, "g", "line-height"), "normal");
+    assert_eq!(value(&d, "w", "white-space-collapse"), "preserve");
+    assert_eq!(value(&d, "w", "text-wrap-mode"), "nowrap");
+    assert_eq!(value(&d, "x", "white-space-collapse"), "preserve-breaks");
+    assert_eq!(value(&d, "x", "text-wrap-mode"), "wrap");
+    assert_eq!(value(&d, "t", "text-wrap-mode"), "nowrap");
+    assert_eq!(value(&d, "t", "text-wrap-style"), "balance");
+    // Invalid values set nothing: the initial values stay.
+    assert_eq!(value(&d, "bad", "font-size"), "16px");
+    assert_eq!(value(&d, "bad", "white-space-collapse"), "collapse");
+}

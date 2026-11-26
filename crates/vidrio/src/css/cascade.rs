@@ -1326,13 +1326,19 @@ impl<'a> Cascaded<'a> {
 
 /// The longhands a declaration sets: itself, every longhand for `all`,
 /// and the longhands of a shorthand kept as one declaration when its
-/// value is a CSS-wide keyword (or, for `background`, a lone color; see
+/// value is a CSS-wide keyword (or, for `background`, a lone color, and
+/// for `font`, `white-space` and `text-wrap`, any valid value; see
 /// [`shorthand_value`]).
 fn expanded_names(d: &Declaration) -> Vec<String> {
     if d.name.starts_with("--") || properties::property(&d.name).is_some() {
         return vec![d.name.clone()];
     }
     let wide = keyword_of(&d.value).is_some_and(|k| properties::is_css_wide_keyword(&k));
+    if !wide {
+        if let Some(parts) = split_shorthand(&d.name, &d.value) {
+            return parts.into_iter().map(|(n, _)| n.to_string()).collect();
+        }
+    }
     if d.name == "background" && !wide && is_lone_color(&d.value) {
         return properties::longhands_of("background")
             .unwrap_or_default()
@@ -1376,5 +1382,235 @@ pub fn shorthand_value(d: &Declaration, longhand: &str) -> Option<Vec<Token>> {
         }
         return properties::property(longhand).map(|p| tokenize(p.initial));
     }
-    None
+    split_shorthand(&d.name, &d.value)?
+        .into_iter()
+        .find(|(n, _)| *n == longhand)
+        .map(|(_, v)| v)
+}
+
+/// The top-level component values of `tokens` without whitespace: a
+/// function or block with its contents is one component.
+fn components(tokens: &[Token]) -> Vec<Vec<Token>> {
+    let mut out: Vec<Vec<Token>> = Vec::new();
+    let mut depth = 0usize;
+    let mut current: Vec<Token> = Vec::new();
+    for t in tokens {
+        if depth == 0 && *t == Token::Whitespace {
+            continue;
+        }
+        current.push(t.clone());
+        match t {
+            Token::Function(_) | Token::LeftParen | Token::LeftBracket | Token::LeftBrace => {
+                depth += 1
+            }
+            Token::RightParen | Token::RightBracket | Token::RightBrace => {
+                depth = depth.saturating_sub(1)
+            }
+            _ => {}
+        }
+        if depth == 0 {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+fn matches_longhand(name: &str, tokens: &[Token]) -> bool {
+    matches!(
+        super::values::grammar::parse_property(name, tokens),
+        Some(Some(_))
+    )
+}
+
+fn ident_of(c: &[Token]) -> Option<String> {
+    match c {
+        [Token::Ident(k)] => Some(k.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+/// Every longhand of `shorthand` with its initial value, then the values
+/// in `set` in their place.
+fn with_initials(
+    shorthand: &str,
+    set: Vec<(&'static str, Vec<Token>)>,
+) -> Vec<(&'static str, Vec<Token>)> {
+    let mut out: Vec<(&'static str, Vec<Token>)> = properties::longhands_of(shorthand)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|l| {
+            let initial = properties::property(l).map_or("initial", |p| p.initial);
+            (l, tokenize(initial))
+        })
+        .collect();
+    for (name, value) in set {
+        match out.iter_mut().find(|(n, _)| *n == name) {
+            Some(entry) => entry.1 = value,
+            None => out.push((name, value)),
+        }
+    }
+    out
+}
+
+/// The longhand values of a shorthand vidrio keeps as one declaration
+/// but splits for the cascade: `font` (CSS Fonts 4 §2.8), `white-space`
+/// (css-text-4 §3) and `text-wrap` (css-text-4 §6.1). `None` for other
+/// shorthands, for values with `var()` and for invalid values.
+fn split_shorthand(name: &str, tokens: &[Token]) -> Option<Vec<(&'static str, Vec<Token>)>> {
+    if tokens.iter().any(|t| matches!(t, Token::Function(f) if f.eq_ignore_ascii_case("var") || f.eq_ignore_ascii_case("attr") || f.eq_ignore_ascii_case("env"))) {
+        return None;
+    }
+    let comps = components(tokens);
+    if comps.is_empty() {
+        return None;
+    }
+    match name {
+        "white-space" => {
+            let keyword = |k: &str| tokenize(k);
+            if let [c] = comps.as_slice() {
+                let pair = match ident_of(c).as_deref() {
+                    Some("normal") => Some(("collapse", "wrap")),
+                    Some("pre") => Some(("preserve", "nowrap")),
+                    Some("pre-wrap") => Some(("preserve", "wrap")),
+                    Some("pre-line") => Some(("preserve-breaks", "wrap")),
+                    _ => None,
+                };
+                if let Some((collapse, wrap)) = pair {
+                    return Some(with_initials(
+                        "white-space",
+                        vec![
+                            ("white-space-collapse", keyword(collapse)),
+                            ("text-wrap-mode", keyword(wrap)),
+                        ],
+                    ));
+                }
+            }
+            let mut set: Vec<(&'static str, Vec<Token>)> = Vec::new();
+            for c in &comps {
+                let longhand = ["white-space-collapse", "text-wrap-mode"]
+                    .into_iter()
+                    .find(|l| matches_longhand(l, c))?;
+                if set.iter().any(|(n, _)| *n == longhand) {
+                    return None;
+                }
+                set.push((longhand, c.clone()));
+            }
+            Some(with_initials("white-space", set))
+        }
+        "text-wrap" => {
+            let mut set: Vec<(&'static str, Vec<Token>)> = Vec::new();
+            for c in &comps {
+                let longhand = ["text-wrap-mode", "text-wrap-style"]
+                    .into_iter()
+                    .find(|l| matches_longhand(l, c))?;
+                if set.iter().any(|(n, _)| *n == longhand) {
+                    return None;
+                }
+                set.push((longhand, c.clone()));
+            }
+            Some(with_initials("text-wrap", set))
+        }
+        "font" => split_font(&comps),
+        _ => None,
+    }
+}
+
+/// `font`: `[ <'font-style'> || <font-variant-css2> || <'font-weight'> ||
+/// <font-width-css3> ]? <'font-size'> [ / <'line-height'> ]?
+/// <'font-family'>#`, or a system font keyword (`sans-serif`, D-15).
+fn split_font(comps: &[Vec<Token>]) -> Option<Vec<(&'static str, Vec<Token>)>> {
+    if let [c] = comps {
+        let k = ident_of(c)?;
+        if matches!(
+            k.as_str(),
+            "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar"
+        ) {
+            return Some(with_initials(
+                "font",
+                vec![("font-family", tokenize("sans-serif"))],
+            ));
+        }
+        return None;
+    }
+    const WIDTHS: &[&str] = &[
+        "ultra-condensed",
+        "extra-condensed",
+        "condensed",
+        "semi-condensed",
+        "semi-expanded",
+        "expanded",
+        "extra-expanded",
+        "ultra-expanded",
+    ];
+    let mut set: Vec<(&'static str, Vec<Token>)> = Vec::new();
+    let mut i = 0;
+    let mut prefix = 0;
+    while i < comps.len() && prefix < 4 {
+        let c = &comps[i];
+        let k = ident_of(c);
+        let has = |set: &Vec<(&'static str, Vec<Token>)>, n: &str| set.iter().any(|(x, _)| *x == n);
+        if k.as_deref() == Some("normal") {
+            i += 1;
+            prefix += 1;
+            continue;
+        }
+        if !has(&set, "font-style") && k.as_deref() == Some("oblique") {
+            // `oblique <angle>?`
+            let mut value = c.clone();
+            if let Some(next) = comps.get(i + 1) {
+                let mut with_angle = c.clone();
+                with_angle.push(Token::Whitespace);
+                with_angle.extend(next.iter().cloned());
+                if matches_longhand("font-style", &with_angle) {
+                    value = with_angle;
+                    i += 1;
+                }
+            }
+            set.push(("font-style", value));
+        } else if !has(&set, "font-style") && k.as_deref() == Some("italic") {
+            set.push(("font-style", c.clone()));
+        } else if !has(&set, "font-variant-caps") && k.as_deref() == Some("small-caps") {
+            set.push(("font-variant-caps", c.clone()));
+        } else if !has(&set, "font-weight")
+            && matches_longhand("font-weight", c)
+            && !matches_longhand("font-size", c)
+        {
+            set.push(("font-weight", c.clone()));
+        } else if !has(&set, "font-stretch") && k.as_deref().is_some_and(|k| WIDTHS.contains(&k)) {
+            set.push(("font-stretch", c.clone()));
+        } else {
+            break;
+        }
+        i += 1;
+        prefix += 1;
+    }
+    let size = comps.get(i)?;
+    if !matches_longhand("font-size", size) {
+        return None;
+    }
+    set.push(("font-size", size.clone()));
+    i += 1;
+    if matches!(comps.get(i).map(Vec::as_slice), Some([Token::Delim('/')])) {
+        let lh = comps.get(i + 1)?;
+        if !matches_longhand("line-height", lh) {
+            return None;
+        }
+        set.push(("line-height", lh.clone()));
+        i += 2;
+    }
+    let mut family: Vec<Token> = Vec::new();
+    for c in comps.get(i..)? {
+        if !family.is_empty() {
+            family.push(Token::Whitespace);
+        }
+        family.extend(c.iter().cloned());
+    }
+    if family.is_empty() || !matches_longhand("font-family", &family) {
+        return None;
+    }
+    set.push(("font-family", family));
+    Some(with_initials("font", set))
 }
