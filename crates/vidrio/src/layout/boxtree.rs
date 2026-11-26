@@ -282,6 +282,18 @@ impl Sink {
         self.flush(parent);
         Contents::Blocks(self.blocks)
     }
+
+    /// The children of a flex container: every contiguous run of inline
+    /// content becomes an anonymous block, so that it is one flex item
+    /// (css-flexbox-1 §4), and runs of only collapsible white space are
+    /// not rendered.
+    fn finish_items(mut self, parent: &ComputedStyle) -> Contents {
+        while !self.open.is_empty() {
+            self.close();
+        }
+        self.flush(parent);
+        Contents::Blocks(self.blocks)
+    }
 }
 
 /// Builds the box tree of a document.
@@ -294,6 +306,10 @@ pub(crate) struct Builder<'a> {
     /// The body's `overflow` goes to the viewport (CSS 2 §11.1.1).
     pub body_overflow_propagated: bool,
     pub body: Option<NodeId>,
+    /// The boxes being built are children of a flex container: they are
+    /// blockified and do not float (css-display-3 §2.7, css-flexbox-1
+    /// §4).
+    flex_parent: bool,
 }
 
 impl<'a> Builder<'a> {
@@ -310,6 +326,7 @@ impl<'a> Builder<'a> {
             quotes: Quotes::default(),
             body_overflow_propagated: false,
             body: None,
+            flex_parent: false,
         }
     }
 
@@ -478,13 +495,14 @@ impl<'a> Builder<'a> {
             _ => {}
         }
         if let Some(r) = self.replaced(e, local.as_deref()) {
-            let inline_level = matches!(
-                display,
-                Display::Box {
-                    outer: Outer::Inline,
-                    ..
-                }
-            );
+            let inline_level = !self.flex_parent
+                && matches!(
+                    display,
+                    Display::Box {
+                        outer: Outer::Inline,
+                        ..
+                    }
+                );
             let b = BoxNode {
                 style: style.clone(),
                 node: Some(e),
@@ -559,7 +577,7 @@ impl<'a> Builder<'a> {
         let s = b.style.clone();
         if values::out_of_flow(&s) {
             sink.push(InlineItem::OutOfFlow(b));
-        } else if values::float(&s) != Float::None {
+        } else if values::float(&s) != Float::None && !self.flex_parent {
             sink.push(InlineItem::Float(b));
         } else if inline_level {
             sink.push(InlineItem::Atomic(b));
@@ -659,7 +677,9 @@ impl<'a> Builder<'a> {
         else {
             return;
         };
-        let floats = values::float(&style) != Float::None;
+        let blockify = self.flex_parent;
+        let outer = if blockify { Outer::Block } else { outer };
+        let floats = values::float(&style) != Float::None && !blockify;
         let oof = values::out_of_flow(&style);
         let local = node
             .filter(|_| pseudo.is_none())
@@ -681,6 +701,7 @@ impl<'a> Builder<'a> {
         }
         let mut inner_sink = Sink::new();
         self.counters.push();
+        self.flex_parent = inner == Inner::Flex;
         let mut marker = None;
         if list_item {
             if let (Some(e), None) = (node, pseudo) {
@@ -734,7 +755,12 @@ impl<'a> Builder<'a> {
             }
         };
         self.counters.pop();
-        let mut contents = inner_sink.finish(&style);
+        self.flex_parent = blockify;
+        let mut contents = if inner == Inner::Flex {
+            inner_sink.finish_items(&style)
+        } else {
+            inner_sink.finish(&style)
+        };
         if let (Some(e), None) = (node, pseudo) {
             if let Some(fl) = self.styles.pseudo(e, Pseudo::FirstLetter).cloned() {
                 first_letter(&mut contents, fl, e);
@@ -753,7 +779,8 @@ impl<'a> Builder<'a> {
             || floats
             || oof
             || inline_level
-            || control.is_some();
+            || control.is_some()
+            || blockify;
         let b = BoxNode {
             style: style.clone(),
             node,

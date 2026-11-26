@@ -1,17 +1,18 @@
 //! Layout (`vault/CONTRACT.md` §3.5): the box tree of a styled document
 //! and one pass of block and inline formatting (CSS 2 §9, §10; css-text-3;
 //! css-inline-3) that produces an immutable fragment tree in absolute
-//! coordinates, then positioned layout (relative, sticky, absolute and
-//! fixed boxes), overflow clips and scroll containers, and stacking.
-//! Only `writing-mode: horizontal-tb` is laid out; logical margins,
-//! paddings and insets arrive mapped to physical ones by the cascade.
-//! Tables, flex and grid containers are laid out as block flow roots
-//! until their own layout modes exist.
+//! coordinates, flex layout (css-flexbox-1), then positioned layout
+//! (relative, sticky, absolute and fixed boxes), overflow clips and
+//! scroll containers, and stacking. Only `writing-mode: horizontal-tb`
+//! is laid out; logical margins, paddings and insets arrive mapped to
+//! physical ones by the cascade. Tables and grid containers are laid
+//! out as block flow roots until their own layout modes exist.
 
 pub(crate) mod bidi;
 mod block;
 mod boxtree;
 mod content;
+mod flex;
 mod float;
 pub mod fragment;
 mod inline;

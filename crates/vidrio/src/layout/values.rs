@@ -188,8 +188,8 @@ pub(crate) enum Outer {
     Inline,
 }
 
-/// The inner display type. Tables, flex and grid containers are laid out
-/// as flow roots until their own layout modes exist.
+/// The inner display type. Tables and grid containers are laid out as
+/// flow roots until their own layout modes exist.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Inner {
     Flow,

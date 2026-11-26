@@ -23,6 +23,7 @@ use crate::css::style::ComputedStyle;
 
 use super::Ctx;
 use super::boxtree::{BoxKind, BoxNode, Container, Contents, Replaced};
+use super::flex;
 use super::float::FloatContext;
 use super::fragment::{Fragment, FragmentKind, Rect, Sides};
 use super::inline;
@@ -411,6 +412,9 @@ pub(crate) fn intrinsic(ctx: &mut Ctx, b: &BoxNode) -> (f64, f64) {
                 let w = values::contain_intrinsic(&b.style, "contain-intrinsic-width");
                 return (w, w);
             }
+            if flex::is_flex(&b.style) {
+                return flex::intrinsic(ctx, c, &b.style);
+            }
             if let Some(cs) = c.control {
                 if let Some(chars) = cs.chars {
                     let m = ctx.fonts.metrics(&b.style);
@@ -678,6 +682,11 @@ pub(super) fn layout_independent(
     w: f64,
     cbh: Option<f64>,
 ) -> Independent {
+    if flex::is_flex(&b.style) {
+        let mut inner = flex::layout(ctx, b, c, w, cbh);
+        inner.height = contained_height(&b.style, inner.height);
+        return inner;
+    }
     let mut floats = FloatContext::default();
     let mut flow = Flow::new(0.0);
     let children = layout_contents(
