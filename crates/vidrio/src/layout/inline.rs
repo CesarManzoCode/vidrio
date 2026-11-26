@@ -1354,7 +1354,7 @@ fn build_line(
         for pc in &pieces {
             if let PieceKind::Anchor(k) = pc.kind {
                 if let InlineItem::OutOfFlow(b) = &ic.items[k] {
-                    oofs.push(block::layout_out_of_flow(ctx, b, cb, x_start, y));
+                    oofs.push(block::static_position(b, x_start, y, 0.0));
                 }
             }
         }
@@ -1697,7 +1697,7 @@ fn build_line(
             }
             PieceKind::Anchor(item) => {
                 if let InlineItem::OutOfFlow(b) = &ic.items[*item] {
-                    oofs.push(block::layout_out_of_flow(ctx, b, cb, pc.x, y));
+                    oofs.push(block::static_position(b, pc.x, y, 0.0));
                 }
             }
             PieceKind::Edge { .. } => {}

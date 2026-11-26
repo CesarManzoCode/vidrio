@@ -292,8 +292,8 @@ pub(crate) struct Builder<'a> {
     counters: Counters,
     quotes: Quotes,
     /// The body's `overflow` goes to the viewport (CSS 2 §11.1.1).
-    body_overflow_propagated: bool,
-    body: Option<NodeId>,
+    pub body_overflow_propagated: bool,
+    pub body: Option<NodeId>,
 }
 
 impl<'a> Builder<'a> {
@@ -429,6 +429,32 @@ impl<'a> Builder<'a> {
                 ..
             }
         );
+        // `display: contents` on replaced elements and form controls
+        // computes to `none` (css-display-3 §2.8, Appendix B).
+        if display == Display::Contents
+            && self.doc.element(e).is_some_and(|d| {
+                d.name.ns == Some(Namespace::Html)
+                    && matches!(
+                        d.name.local.as_str(),
+                        "img"
+                            | "iframe"
+                            | "video"
+                            | "audio"
+                            | "canvas"
+                            | "embed"
+                            | "object"
+                            | "input"
+                            | "textarea"
+                            | "select"
+                            | "meter"
+                            | "progress"
+                            | "br"
+                            | "wbr"
+                    )
+            })
+        {
+            return;
+        }
         let attrs = self.list_attributes(e);
         content::apply_counters(&mut self.counters, &style, list_item, attrs);
         if display == Display::Contents {

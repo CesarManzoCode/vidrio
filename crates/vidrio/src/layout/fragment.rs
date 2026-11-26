@@ -4,7 +4,9 @@
 //! containing block), its used margins, borders and paddings, the node
 //! and pseudo-element that generated it and their computed style.
 //! Line boxes and text runs are fragments too; text fragments hold their
-//! positioned glyphs, ready to paint.
+//! positioned glyphs, ready to paint. Box fragments also say whether
+//! they clip their content, are scroll containers (with their scrollable
+//! overflow area) and how they take part in stacking (CSS 2 §9.9).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -140,9 +142,68 @@ pub enum FragmentKind {
     Text(TextFragment),
     /// A `::marker` box placed outside its list item.
     Marker,
-    /// An absolutely or fixed positioned box, at its static position
-    /// until positioned layout places it.
+    /// An absolutely or fixed positioned block container (positioned
+    /// replaced elements are `Replaced`).
     OutOfFlow,
+    /// The static position of an out-of-flow box before positioned
+    /// layout places it: its `x` and `right()` are the left and right
+    /// static positions, its `y` the top one. A finished tree has none.
+    Placeholder,
+}
+
+/// A used `overflow-x` or `overflow-y`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Overflow {
+    Visible,
+    Hidden,
+    Clip,
+    Scroll,
+    Auto,
+}
+
+impl Overflow {
+    /// The value makes the box a scroll container.
+    pub fn scrolls(self) -> bool {
+        matches!(self, Overflow::Hidden | Overflow::Scroll | Overflow::Auto)
+    }
+}
+
+/// A scroll container (css-overflow-3 §2.3). Scroll bars take no space
+/// (their width is 0 in every mode), so the scrollport is the padding
+/// box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scroll {
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
+    pub scrollport: Rect,
+    /// The scrollable overflow area (css-overflow-3 §2.2), at least the
+    /// scrollport; it does not extend into the unreachable side (above
+    /// the scrollport, and left of it in `ltr` or right of it in `rtl`).
+    pub scrollable: Rect,
+    /// The scroll position: the offset of the scrollport into the area
+    /// from its scroll origin. Always 0, 0 until scrolling exists.
+    pub offset: (f64, f64),
+}
+
+/// The overflow clip of a box: the interval each clipped axis keeps
+/// (`None` for an axis that is not clipped).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Clip {
+    pub x: Option<(f64, f64)>,
+    pub y: Option<(f64, f64)>,
+}
+
+/// How a box takes part in stacking (CSS 2 §9.9.1, Appendix E).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Stacking {
+    /// Painted in its parent's layers.
+    #[default]
+    None,
+    /// Positioned with `z-index: auto`: painted as if it created a
+    /// stacking context with z-index 0, without being one.
+    Positioned,
+    /// Creates a stacking context with this z-index.
+    Context(i32),
 }
 
 /// One glyph to paint.
@@ -187,6 +248,15 @@ pub struct Fragment {
     pub border: Sides,
     pub padding: Sides,
     pub children: Vec<Fragment>,
+    /// The scroll container this box is, if it is one.
+    pub scroll: Option<Box<Scroll>>,
+    /// The overflow clip of the box's content.
+    pub clip: Option<Clip>,
+    pub stacking: Stacking,
+    /// Where a replaced element draws its content (`object-fit` and
+    /// `object-position`, css-images-3 §5.5), in absolute coordinates
+    /// (relative to the border box until the tree is absolute).
+    pub object: Option<Rect>,
 }
 
 impl Fragment {
@@ -201,7 +271,17 @@ impl Fragment {
             border: Sides::default(),
             padding: Sides::default(),
             children: Vec::new(),
+            scroll: None,
+            clip: None,
+            stacking: Stacking::None,
+            object: None,
         }
+    }
+
+    /// The box is visible (`visibility: collapse` hides boxes that are
+    /// not table rows and columns, css-display-3 §4).
+    pub fn is_visible(&self) -> bool {
+        matches!(self.style.text("visibility").as_str(), "" | "visible")
     }
 
     pub fn padding_rect(&self) -> Rect {
@@ -254,6 +334,10 @@ impl Fragment {
         self.rect.x += dx;
         self.rect.y += dy;
         let (x, y) = (self.rect.x, self.rect.y);
+        if let Some(o) = &mut self.object {
+            o.x += x;
+            o.y += y;
+        }
         match &mut self.kind {
             FragmentKind::Line { baseline } => *baseline += y,
             FragmentKind::Text(t) => {
@@ -266,6 +350,46 @@ impl Fragment {
         }
         for c in &mut self.children {
             c.absolutize(x, y);
+        }
+    }
+
+    /// Moves the fragment and its subtree by (`dx`, `dy`) once the tree
+    /// is absolute.
+    pub(crate) fn shift(&mut self, dx: f64, dy: f64) {
+        self.rect.x += dx;
+        self.rect.y += dy;
+        if let Some(o) = &mut self.object {
+            o.x += dx;
+            o.y += dy;
+        }
+        if let Some(sc) = &mut self.scroll {
+            sc.scrollport.x += dx;
+            sc.scrollport.y += dy;
+            sc.scrollable.x += dx;
+            sc.scrollable.y += dy;
+        }
+        if let Some(c) = &mut self.clip {
+            if let Some((a, b)) = &mut c.x {
+                *a += dx;
+                *b += dx;
+            }
+            if let Some((a, b)) = &mut c.y {
+                *a += dy;
+                *b += dy;
+            }
+        }
+        match &mut self.kind {
+            FragmentKind::Line { baseline } => *baseline += dy,
+            FragmentKind::Text(t) => {
+                t.baseline += dy;
+                for g in &mut t.glyphs {
+                    g.x += dx;
+                }
+            }
+            _ => {}
+        }
+        for c in &mut self.children {
+            c.shift(dx, dy);
         }
     }
 

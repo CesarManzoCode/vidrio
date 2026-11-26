@@ -1,10 +1,12 @@
 //! Layout (`vault/CONTRACT.md` §3.5): the box tree of a styled document
 //! and one pass of block and inline formatting (CSS 2 §9, §10; css-text-3;
 //! css-inline-3) that produces an immutable fragment tree in absolute
-//! coordinates. Only `writing-mode: horizontal-tb` is laid out. Tables,
-//! flex and grid containers are laid out as block flow roots until their
-//! own layout modes exist, and absolutely positioned boxes stay at their
-//! static position.
+//! coordinates, then positioned layout (relative, sticky, absolute and
+//! fixed boxes), overflow clips and scroll containers, and stacking.
+//! Only `writing-mode: horizontal-tb` is laid out; logical margins,
+//! paddings and insets arrive mapped to physical ones by the cascade.
+//! Tables, flex and grid containers are laid out as block flow roots
+//! until their own layout modes exist.
 
 pub(crate) mod bidi;
 mod block;
@@ -14,6 +16,7 @@ mod float;
 pub mod fragment;
 mod inline;
 pub(crate) mod linebreak;
+mod positioned;
 mod text;
 mod values;
 
@@ -22,7 +25,7 @@ use vgfx::font::system::WebFace;
 use crate::css::style::{StyleMap, initial_style};
 use crate::dom::{Document, NodeId};
 
-use fragment::{Fragment, FragmentKind, FragmentTree, Rect};
+use fragment::{Fragment, FragmentKind, FragmentTree, Overflow, Rect};
 
 /// What one layout pass shares.
 pub(crate) struct Ctx {
@@ -52,13 +55,44 @@ pub fn layout(doc: &Document, styles: &StyleMap, options: Options) -> FragmentTr
     let mut viewport = Fragment::new(FragmentKind::Viewport, initial_style());
     viewport.rect = Rect::new(0.0, 0.0, w, h);
     let mut builder = boxtree::Builder::new(doc, styles, options.images);
-    if let Some(root) = builder.build() {
+    let root = builder.build();
+    if let Some(root) = &root {
         viewport
             .children
-            .push(block::layout_root(&mut ctx, &root, options.viewport));
+            .push(block::layout_root(&mut ctx, root, options.viewport));
     }
     // Every fragment is relative to its parent until here; the viewport
     // is at the origin.
     viewport.absolutize(0.0, 0.0);
+    if let Some(root) = &root {
+        // The viewport takes the root's `overflow`, or the body's when
+        // the root's is `visible` (css-overflow-3 §3.3); `visible` is
+        // `auto` there and `clip` is `hidden`.
+        let mut propagated = Vec::new();
+        let mut source = None;
+        if let Some(r) = doc.document_element() {
+            propagated.push(r);
+            source = styles.get(r);
+        }
+        if builder.body_overflow_propagated {
+            if let Some(b) = builder.body {
+                propagated.push(b);
+                source = styles.get(b);
+            }
+        }
+        let used = |o: Overflow| match o {
+            Overflow::Visible => Overflow::Auto,
+            Overflow::Clip => Overflow::Hidden,
+            o => o,
+        };
+        let (ox, oy) = source.map_or((Overflow::Visible, Overflow::Visible), |s| {
+            values::overflow(s)
+        });
+        let view = positioned::Viewport {
+            overflow: (used(ox), used(oy)),
+            propagated,
+        };
+        positioned::place(&mut ctx, root, &view, &mut viewport);
+    }
     FragmentTree { root: viewport }
 }

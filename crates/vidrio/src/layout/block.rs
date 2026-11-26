@@ -5,7 +5,13 @@
 //! and last children, and through empty boxes), clearance, floats, boxes
 //! that establish formatting contexts beside floats, list markers
 //! outside their items, and the min-content and max-content
-//! contributions every layout mode uses.
+//! contributions every layout mode uses. Sizes follow css-sizing-3 and
+//! -4: `min-content`, `max-content`, `fit-content()` and `stretch` in
+//! both axes, `aspect-ratio` in whichever axis is automatic,
+//! `contain-intrinsic-size` under size containment, and the object
+//! rectangle of replaced elements (`object-fit`, `object-position`).
+//! Out-of-flow boxes leave a placeholder at their static position for
+//! positioned layout.
 //!
 //! Inside one formatting context, positions are those of its root's
 //! content box; a box converts its children to coordinates relative to
@@ -18,7 +24,7 @@ use crate::css::style::ComputedStyle;
 use super::Ctx;
 use super::boxtree::{BoxKind, BoxNode, Container, Contents, Replaced};
 use super::float::FloatContext;
-use super::fragment::{Fragment, FragmentKind, Sides};
+use super::fragment::{Fragment, FragmentKind, Rect, Sides};
 use super::inline;
 use super::values::{self, Float, Margins, Size};
 
@@ -117,14 +123,14 @@ impl Flow {
 
 /// The margins, borders and paddings of a box for a containing block
 /// width.
-struct Model {
-    margin: Margins,
-    border: Sides,
-    padding: Sides,
+pub(super) struct Model {
+    pub margin: Margins,
+    pub border: Sides,
+    pub padding: Sides,
 }
 
 impl Model {
-    fn of(style: &ComputedStyle, cbw: f64) -> Model {
+    pub fn of(style: &ComputedStyle, cbw: f64) -> Model {
         Model {
             margin: values::margins(style, cbw),
             border: values::border(style),
@@ -132,7 +138,7 @@ impl Model {
         }
     }
 
-    fn bp(&self) -> Sides {
+    pub fn bp(&self) -> Sides {
         self.border.add(&self.padding)
     }
 }
@@ -140,7 +146,7 @@ impl Model {
 // ----- sizes -------------------------------------------------------------------------------
 
 /// The content width `width` asks for (`None` for `auto`).
-fn specified_width(
+pub(super) fn specified_width(
     ctx: &mut Ctx,
     b: &BoxNode,
     cbw: Option<f64>,
@@ -170,7 +176,7 @@ fn specified_width(
 }
 
 /// `width` clamped by `max-width` and then `min-width` (CSS 2 §10.4).
-fn clamp_width(ctx: &mut Ctx, b: &BoxNode, w: f64, cbw: Option<f64>, bp_h: f64) -> f64 {
+pub(super) fn clamp_width(ctx: &mut Ctx, b: &BoxNode, w: f64, cbw: Option<f64>, bp_h: f64) -> f64 {
     let s = &b.style;
     let border_box = values::border_box_sizing(s);
     let content = |v: f64| {
@@ -195,10 +201,18 @@ fn clamp_width(ctx: &mut Ctx, b: &BoxNode, w: f64, cbw: Option<f64>, bp_h: f64) 
     w.max(min)
 }
 
-/// The content height `height` asks for (`None` for `auto` and for
-/// percentages of an indefinite height).
-fn specified_height(s: &ComputedStyle, cbh: Option<f64>, bp_v: f64) -> Option<f64> {
-    let h = values::size(s, "height").definite(cbh)?;
+/// The content height `height` asks for in containing block `cb`
+/// (`None` for `auto` and for percentages of an indefinite height). The
+/// content-based keywords behave as `auto` in the block axis of a block
+/// container (css-sizing-3 §5.2); `stretch` fills the containing block.
+pub(super) fn specified_height(s: &ComputedStyle, cb: Cb, bp_v: f64) -> Option<f64> {
+    let h = match values::size(s, "height") {
+        Size::Stretch => {
+            let m = values::margins(s, cb.width).or_zero();
+            return cb.height.map(|h| (h - m.vertical() - bp_v).max(0.0));
+        }
+        sz => sz.definite(cb.height)?,
+    };
     Some(if values::border_box_sizing(s) {
         (h - bp_v).max(0.0)
     } else {
@@ -206,24 +220,33 @@ fn specified_height(s: &ComputedStyle, cbh: Option<f64>, bp_v: f64) -> Option<f6
     })
 }
 
-fn clamp_height(s: &ComputedStyle, h: f64, cbh: Option<f64>, bp_v: f64) -> f64 {
+/// `height` clamped by `max-height` and then `min-height`; `content` is
+/// the content height the content-based keywords stand for.
+pub(super) fn clamp_height(
+    s: &ComputedStyle,
+    h: f64,
+    cbh: Option<f64>,
+    bp_v: f64,
+    content: f64,
+) -> f64 {
     let border_box = values::border_box_sizing(s);
-    let content = |v: f64| {
+    let conv = |v: f64| {
         if border_box { (v - bp_v).max(0.0) } else { v }
     };
+    let limit = |name: &str| match values::size(s, name) {
+        Size::Lp(l) => l.resolve_opt(cbh).map(conv),
+        Size::MinContent | Size::MaxContent | Size::FitContent(_) => Some(content),
+        _ => None,
+    };
     let mut h = h;
-    if let Some(max) = values::size(s, "max-height").definite(cbh) {
-        h = h.min(content(max));
+    if let Some(max) = limit("max-height") {
+        h = h.min(max);
     }
-    let min = values::size(s, "min-height")
-        .definite(cbh)
-        .map(content)
-        .unwrap_or(0.0);
-    h.max(min)
+    h.max(limit("min-height").unwrap_or(0.0))
 }
 
 /// The height `aspect-ratio` gives a box whose width is known.
-fn ratio_height(s: &ComputedStyle, w: f64, bp: &Sides) -> Option<f64> {
+pub(super) fn ratio_height(s: &ComputedStyle, w: f64, bp: &Sides) -> Option<f64> {
     let (_, ratio) = values::aspect_ratio(s);
     let r = ratio?;
     if values::border_box_sizing(s) {
@@ -233,9 +256,42 @@ fn ratio_height(s: &ComputedStyle, w: f64, bp: &Sides) -> Option<f64> {
     }
 }
 
+/// The width `aspect-ratio` gives a box whose height is known.
+pub(super) fn ratio_width(s: &ComputedStyle, h: f64, bp: &Sides) -> Option<f64> {
+    let (_, ratio) = values::aspect_ratio(s);
+    let r = ratio?;
+    if values::border_box_sizing(s) {
+        Some(((h + bp.vertical()) * r - bp.horizontal()).max(0.0))
+    } else {
+        Some(h * r)
+    }
+}
+
+/// The height of a box whose height came from `aspect-ratio`: with
+/// `min-height: auto` and visible overflow it is at least the content
+/// height (css-sizing-4 §5.1, the automatic minimum size).
+pub(super) fn ratio_floor(s: &ComputedStyle, h: f64, from_ratio: bool, content: f64) -> f64 {
+    let (_, oy) = values::overflow(s);
+    if from_ratio && values::size(s, "min-height").is_auto() && !oy.scrolls() {
+        h.max(content)
+    } else {
+        h
+    }
+}
+
+/// The content height of a box under size containment in the block
+/// axis (css-contain-2 §3.1), or `content`.
+pub(super) fn contained_height(s: &ComputedStyle, content: f64) -> f64 {
+    if values::size_contained(s).1 {
+        values::contain_intrinsic(s, "contain-intrinsic-height")
+    } else {
+        content
+    }
+}
+
 /// The used size of a replaced element's content box (CSS 2 §10.3.2,
 /// §10.6.2 and the table of §10.4).
-fn replaced_size(
+pub(super) fn replaced_size(
     ctx: &mut Ctx,
     b: &BoxNode,
     r: &Replaced,
@@ -255,14 +311,27 @@ fn replaced_size(
         }),
         _ => None,
     };
-    let sh = specified_height(s, cbh, bp.vertical());
-    let (auto, given) = values::aspect_ratio(s);
-    let ratio = if auto {
-        r.natural_ratio().or(given)
-    } else {
-        given
+    let cb = Cb {
+        width: cbw.unwrap_or(0.0),
+        height: cbh,
     };
-    let (nw, nh) = (r.natural_width, r.natural_height);
+    let sh = specified_height(s, cb, bp.vertical());
+    let (auto, given) = values::aspect_ratio(s);
+    // Under size containment the natural size is the
+    // `contain-intrinsic-size` and there is no natural ratio.
+    let (ci, cb_) = values::size_contained(s);
+    let natural_ratio = if ci || cb_ { None } else { r.natural_ratio() };
+    let ratio = if auto { natural_ratio.or(given) } else { given };
+    let nw = if ci {
+        Some(values::contain_intrinsic(s, "contain-intrinsic-width"))
+    } else {
+        r.natural_width
+    };
+    let nh = if cb_ {
+        Some(values::contain_intrinsic(s, "contain-intrinsic-height"))
+    } else {
+        r.natural_height
+    };
     let (w, h) = match (sw, sh) {
         (Some(w), Some(h)) => (w, h),
         (Some(w), None) => (w, ratio.map_or(nh.unwrap_or(150.0), |q| w / q)),
@@ -287,8 +356,8 @@ fn replaced_size(
         if big.is_finite() { big } else { f64::INFINITY }
     };
     let min_w = clamp_width(ctx, b, 0.0, cbw, bp_h);
-    let max_h = clamp_height(s, f64::INFINITY, cbh, bp_v);
-    let min_h = clamp_height(s, 0.0, cbh, bp_v);
+    let max_h = clamp_height(s, f64::INFINITY, cbh, bp_v, h);
+    let min_h = clamp_height(s, 0.0, cbh, bp_v, h);
     let max_w = max_w.max(min_w);
     let max_h = max_h.max(min_h);
     if sw.is_some() || sh.is_some() || ratio.is_none() || w <= 0.0 || h <= 0.0 {
@@ -338,6 +407,10 @@ pub(crate) fn intrinsic(ctx: &mut Ctx, b: &BoxNode) -> (f64, f64) {
             (w, w)
         }
         BoxKind::Container(c) => {
+            if values::size_contained(&b.style).0 {
+                let w = values::contain_intrinsic(&b.style, "contain-intrinsic-width");
+                return (w, w);
+            }
             if let Some(cs) = c.control {
                 if let Some(chars) = cs.chars {
                     let m = ctx.fonts.metrics(&b.style);
@@ -426,14 +499,20 @@ pub(crate) fn contribution(ctx: &mut Ctx, b: &BoxNode, cbw: Option<f64>) -> (f64
 
 /// Shrink-to-fit (CSS 2 §10.3.5): min(max(min-content, available),
 /// max-content).
-fn shrink_to_fit(ctx: &mut Ctx, b: &BoxNode, avail: f64) -> f64 {
+pub(super) fn shrink_to_fit(ctx: &mut Ctx, b: &BoxNode, avail: f64) -> f64 {
     let (min, max) = intrinsic(ctx, b);
     max.min(avail.max(min))
 }
 
 /// The used width and horizontal margins of a block-level box in normal
 /// flow (CSS 2 §10.3.3), with `min-width` and `max-width` (§10.4).
-fn block_width(ctx: &mut Ctx, b: &BoxNode, cbw: f64, m: &Model) -> (f64, f64, f64) {
+fn block_width(
+    ctx: &mut Ctx,
+    b: &BoxNode,
+    cbw: f64,
+    cbh: Option<f64>,
+    m: &Model,
+) -> (f64, f64, f64) {
     let bp_h = m.bp().horizontal();
     let rtl = b.style.rtl();
     let solve = |w: Option<f64>| -> (f64, f64, f64) {
@@ -471,6 +550,9 @@ fn block_width(ctx: &mut Ctx, b: &BoxNode, cbw: f64, m: &Model) -> (f64, f64, f6
     let avail = cbw - m.margin.left.unwrap_or(0.0) - m.margin.right.unwrap_or(0.0) - bp_h;
     let mut spec = specified_width(ctx, b, Some(cbw), bp_h, avail);
     if spec.is_none() {
+        spec = ratio_dependent_width(b, cbw, cbh, &m.bp());
+    }
+    if spec.is_none() {
         if let BoxKind::Container(c) = &b.kind {
             if let Some(cs) = c.control {
                 if let Some(chars) = cs.chars {
@@ -486,6 +568,58 @@ fn block_width(ctx: &mut Ctx, b: &BoxNode, cbw: f64, m: &Model) -> (f64, f64, f6
     } else {
         (w, ml, mr)
     }
+}
+
+/// The width of a box with `width: auto` whose `aspect-ratio` makes
+/// the width depend on a definite height (css-sizing-4 §5.1).
+pub(super) fn ratio_dependent_width(
+    b: &BoxNode,
+    cbw: f64,
+    cbh: Option<f64>,
+    bp: &Sides,
+) -> Option<f64> {
+    let s = &b.style;
+    let cb = Cb {
+        width: cbw,
+        height: cbh,
+    };
+    let h = specified_height(s, cb, bp.vertical())?;
+    let h = clamp_height(s, h, cbh, bp.vertical(), h);
+    ratio_width(s, h, bp)
+}
+
+/// Sets where replaced element `r` (fragment `frag`, sized) draws its
+/// content: its natural size (or the content box when it has none)
+/// fitted by `object-fit` and placed by `object-position`, relative to
+/// the border box.
+pub(super) fn set_object(frag: &mut Fragment, b: &BoxNode, r: &Replaced) {
+    let s = &b.style;
+    let content = frag.content_rect();
+    let (w, h) = (content.width, content.height);
+    let natural = match (r.natural_width, r.natural_height) {
+        (Some(nw), Some(nh)) if nw > 0.0 && nh > 0.0 => Some((nw, nh)),
+        _ => None,
+    };
+    let (ow, oh) = match natural {
+        None => (w, h),
+        Some((nw, nh)) => {
+            let contain = (w / nw).min(h / nh);
+            let cover = (w / nw).max(h / nh);
+            match values::object_fit(s) {
+                values::ObjectFit::Fill => (w, h),
+                values::ObjectFit::Contain => (nw * contain, nh * contain),
+                values::ObjectFit::Cover => (nw * cover, nh * cover),
+                values::ObjectFit::None => (nw, nh),
+                values::ObjectFit::ScaleDown => {
+                    let k = contain.min(1.0);
+                    (nw * k, nh * k)
+                }
+            }
+        }
+    };
+    let (dx, dy) = values::object_position(s, w, h, ow, oh);
+    let bp = frag.border.add(&frag.padding);
+    frag.object = Some(Rect::new(bp.left + dx, bp.top + dy, ow, oh));
 }
 
 // ----- baselines -----------------------------------------------------------------------
@@ -528,16 +662,16 @@ pub(crate) fn find_baseline(frags: &[Fragment], last: bool) -> Option<f64> {
 // ----- formatting context roots --------------------------------------------------------------
 
 /// The laid out content of a box that establishes a formatting context.
-struct Independent {
+pub(super) struct Independent {
     /// Relative to the content box.
-    children: Vec<Fragment>,
+    pub children: Vec<Fragment>,
     /// The auto height of the content box.
-    height: f64,
+    pub height: f64,
 }
 
 /// Lays out the content of a formatting context root with content width
 /// `w`.
-fn layout_independent(
+pub(super) fn layout_independent(
     ctx: &mut Ctx,
     b: &BoxNode,
     c: &Container,
@@ -570,6 +704,7 @@ fn layout_independent(
             height = lines * lh;
         }
     }
+    let height = contained_height(&b.style, height);
     Independent { children, height }
 }
 
@@ -591,14 +726,15 @@ fn layout_detached(ctx: &mut Ctx, b: &BoxNode, cb: Cb, kind: FragmentKind) -> (F
     let (w, h) = match &b.kind {
         BoxKind::Replaced(r) => {
             let (w, h) = replaced_size(ctx, b, r, Some(cb.width), cb.height);
-            if !matches!(frag.kind, FragmentKind::OutOfFlow) {
-                frag.kind = FragmentKind::Replaced(r.kind);
-            }
+            frag.kind = FragmentKind::Replaced(r.kind);
             (w, h)
         }
         BoxKind::Container(c) => {
             let avail = cb.width - margin.horizontal() - bp.horizontal();
             let mut w = specified_width(ctx, b, Some(cb.width), bp.horizontal(), avail);
+            if w.is_none() {
+                w = ratio_dependent_width(b, cb.width, cb.height, &bp);
+            }
             if w.is_none() {
                 if let Some(cs) = c.control {
                     if let Some(chars) = cs.chars {
@@ -611,10 +747,20 @@ fn layout_detached(ctx: &mut Ctx, b: &BoxNode, cb: Cb, kind: FragmentKind) -> (F
                 None => shrink_to_fit(ctx, b, avail),
             };
             let w = clamp_width(ctx, b, w, Some(cb.width), bp.horizontal());
-            let spec_h =
-                specified_height(s, cb.height, bp.vertical()).or_else(|| ratio_height(s, w, &bp));
+            let explicit_h = specified_height(s, cb, bp.vertical());
+            let ratio_h = explicit_h
+                .is_none()
+                .then(|| ratio_height(s, w, &bp))
+                .flatten();
+            let spec_h = explicit_h.or(ratio_h);
             let inner = layout_independent(ctx, b, c, w, spec_h);
-            let h = clamp_height(s, spec_h.unwrap_or(inner.height), cb.height, bp.vertical());
+            let used = ratio_floor(
+                s,
+                spec_h.unwrap_or(inner.height),
+                ratio_h.is_some(),
+                inner.height,
+            );
+            let h = clamp_height(s, used, cb.height, bp.vertical(), inner.height);
             let mut children = inner.children;
             for ch in &mut children {
                 ch.translate(bp.left, bp.top);
@@ -627,6 +773,9 @@ fn layout_detached(ctx: &mut Ctx, b: &BoxNode, cb: Cb, kind: FragmentKind) -> (F
     frag.rect.y = margin.top;
     frag.rect.width = w + bp.horizontal();
     frag.rect.height = h + bp.vertical();
+    if let BoxKind::Replaced(r) = &b.kind {
+        set_object(&mut frag, b, r);
+    }
     let mw = frag.rect.width + margin.horizontal();
     let mh = frag.rect.height + margin.vertical();
     (frag, mw, mh)
@@ -654,11 +803,16 @@ pub(crate) fn layout_atomic(ctx: &mut Ctx, b: &BoxNode, cb: Cb) -> (Fragment, f6
     (frag, mw, mh, baseline)
 }
 
-/// An absolutely positioned box at its static position (positioned
-/// layout replaces this).
-pub(crate) fn layout_out_of_flow(ctx: &mut Ctx, b: &BoxNode, cb: Cb, x: f64, y: f64) -> Fragment {
-    let (mut frag, _, _) = layout_detached(ctx, b, cb, FragmentKind::OutOfFlow);
-    frag.translate(x, y);
+/// The placeholder of out-of-flow box `b` at its static position
+/// (`x`, `y`): positioned layout lays the box out once its containing
+/// block is known. `width` is the width of the containing block the
+/// static position is in, so that the right static position is
+/// `x + width` (0 inside a line, where both are `x`).
+pub(crate) fn static_position(b: &BoxNode, x: f64, y: f64, width: f64) -> Fragment {
+    let mut frag = Fragment::new(FragmentKind::Placeholder, b.style.clone());
+    frag.node = b.node;
+    frag.pseudo = b.pseudo;
+    frag.rect = Rect::new(x, y, width, 0.0);
     frag
 }
 
@@ -726,7 +880,7 @@ fn layout_contents(
             for child in children {
                 if values::out_of_flow(&child.style) {
                     let y = flow.hypothetical();
-                    out.push(layout_out_of_flow(ctx, child, cb, x, y));
+                    out.push(static_position(child, x, y, w));
                     continue;
                 }
                 if values::float(&child.style) != Float::None {
@@ -847,7 +1001,7 @@ fn flow_block(
     let s = &b.style;
     let m = Model::of(s, cb.width);
     let bp = m.bp();
-    let (w, ml, mr) = block_width(ctx, b, cb.width, &m);
+    let (w, ml, mr) = block_width(ctx, b, cb.width, cb.height, &m);
     let bx = cb_x + ml;
     let mt = m.margin.top.unwrap_or(0.0);
     let mb = m.margin.bottom.unwrap_or(0.0);
@@ -862,7 +1016,12 @@ fn flow_block(
     };
     let known_top = if slot.is_none() { Some(flow.y) } else { None };
     flow.y += bp.top;
-    let spec_h = specified_height(s, cb.height, bp.vertical()).or_else(|| ratio_height(s, w, &bp));
+    let explicit_h = specified_height(s, cb, bp.vertical());
+    let ratio_h = explicit_h
+        .is_none()
+        .then(|| ratio_height(s, w, &bp))
+        .flatten();
+    let spec_h = explicit_h.or(ratio_h);
     let mut followers = Vec::new();
     let mut children = layout_contents(
         ctx,
@@ -876,7 +1035,7 @@ fn flow_block(
         first_line,
         &mut followers,
     );
-    let min_h = clamp_height(s, 0.0, cb.height, bp.vertical());
+    let min_h = clamp_height(s, 0.0, cb.height, bp.vertical(), 0.0);
     let can_collapse_bottom = bp.bottom == 0.0 && spec_h.is_none() && min_h <= EPS;
     let (top, collapsed_through) = match (known_top, slot) {
         (Some(t), _) => (t, false),
@@ -901,9 +1060,10 @@ fn flow_block(
     let auto_h = if collapsed_through {
         0.0
     } else {
-        (flow.y - content_top).max(0.0)
+        contained_height(s, (flow.y - content_top).max(0.0))
     };
-    let h = clamp_height(s, spec_h.unwrap_or(auto_h), cb.height, bp.vertical());
+    let used = ratio_floor(s, spec_h.unwrap_or(auto_h), ratio_h.is_some(), auto_h);
+    let h = clamp_height(s, used, cb.height, bp.vertical(), auto_h);
     for &i in &followers {
         children[i].rect.y = top;
     }
@@ -973,7 +1133,7 @@ fn flow_independent(
         let narrowed = l > cb_left + EPS || r < cb_right - EPS;
         // The width and margins for the space beside the floats.
         let (w, ml, mr, x) = if !narrowed {
-            let (w, ml, mr, h_override) = independent_width(ctx, b, cb.width, &m);
+            let (w, ml, mr, h_override) = independent_width(ctx, b, cb.width, cb.height, &m);
             let _ = h_override;
             (w, ml, mr, cb_left + ml)
         } else {
@@ -986,6 +1146,7 @@ fn flow_independent(
                 ctx,
                 b,
                 space + bp.horizontal(),
+                cb.height,
                 &Model {
                     margin: Margins {
                         left: Some(0.0),
@@ -1025,7 +1186,7 @@ fn flow_independent(
         band_h = border_h;
     }
     let (mut frag, x, ml, mr) = result.unwrap_or_else(|| {
-        let (w, ml, mr, _) = independent_width(ctx, b, cb.width, &m);
+        let (w, ml, mr, _) = independent_width(ctx, b, cb.width, cb.height, &m);
         let (frag, _) = independent_box(ctx, b, w, cb);
         (frag, cb_left + ml, ml, mr)
     });
@@ -1043,11 +1204,12 @@ fn independent_width(
     ctx: &mut Ctx,
     b: &BoxNode,
     cbw: f64,
+    cbh: Option<f64>,
     m: &Model,
 ) -> (f64, f64, f64, Option<f64>) {
     match &b.kind {
         BoxKind::Replaced(r) => {
-            let (w, h) = replaced_size(ctx, b, r, Some(cbw), None);
+            let (w, h) = replaced_size(ctx, b, r, Some(cbw), cbh);
             let bp_h = m.bp().horizontal();
             let rest = cbw - w - bp_h;
             let rtl = b.style.rtl();
@@ -1072,7 +1234,7 @@ fn independent_width(
             (w, ml, mr, Some(h))
         }
         BoxKind::Container(_) => {
-            let (w, ml, mr) = block_width(ctx, b, cbw, m);
+            let (w, ml, mr) = block_width(ctx, b, cbw, cbh, m);
             (w, ml, mr, None)
         }
     }
@@ -1096,10 +1258,20 @@ fn independent_box(ctx: &mut Ctx, b: &BoxNode, w: f64, cb: Cb) -> (Fragment, f64
             (FragmentKind::Replaced(r.kind), h, Vec::new())
         }
         BoxKind::Container(c) => {
-            let spec_h =
-                specified_height(s, cb.height, bp.vertical()).or_else(|| ratio_height(s, w, &bp));
+            let explicit_h = specified_height(s, cb, bp.vertical());
+            let ratio_h = explicit_h
+                .is_none()
+                .then(|| ratio_height(s, w, &bp))
+                .flatten();
+            let spec_h = explicit_h.or(ratio_h);
             let inner = layout_independent(ctx, b, c, w, spec_h);
-            let h = clamp_height(s, spec_h.unwrap_or(inner.height), cb.height, bp.vertical());
+            let used = ratio_floor(
+                s,
+                spec_h.unwrap_or(inner.height),
+                ratio_h.is_some(),
+                inner.height,
+            );
+            let h = clamp_height(s, used, cb.height, bp.vertical(), inner.height);
             let mut children = inner.children;
             for ch in &mut children {
                 ch.translate(bp.left, bp.top);
@@ -1122,10 +1294,13 @@ fn independent_box(ctx: &mut Ctx, b: &BoxNode, w: f64, cb: Cb) -> (Fragment, f64
     frag.rect.width = w + bp.horizontal();
     frag.rect.height = h + bp.vertical();
     frag.children = children;
-    if let BoxKind::Container(c) = &b.kind {
-        if let Some(marker) = &c.marker {
-            place_marker(ctx, marker, &mut frag, cb);
+    match &b.kind {
+        BoxKind::Container(c) => {
+            if let Some(marker) = &c.marker {
+                place_marker(ctx, marker, &mut frag, cb);
+            }
         }
+        BoxKind::Replaced(r) => set_object(&mut frag, b, r),
     }
     (frag, h)
 }
@@ -1133,7 +1308,7 @@ fn independent_box(ctx: &mut Ctx, b: &BoxNode, w: f64, cb: Cb) -> (Fragment, f64
 /// Places a list item's outside `::marker` (css-lists-3 §3.4): beside
 /// the start edge of the item's content box, on the baseline of its
 /// first line (or of where the first line would be).
-fn place_marker(ctx: &mut Ctx, marker: &BoxNode, item: &mut Fragment, cb: Cb) {
+pub(super) fn place_marker(ctx: &mut Ctx, marker: &BoxNode, item: &mut Fragment, cb: Cb) {
     let (mut mf, mw, _, baseline) = layout_atomic(ctx, marker, cb);
     mf.kind = FragmentKind::Marker;
     let content = Fragment::content_rect(item);
