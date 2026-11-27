@@ -12,7 +12,7 @@
 //! (`<position>`, `<line-style>`, …) live in [`DEFINITIONS`].
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::{
@@ -476,13 +476,117 @@ const TRANSFORM_FUNCTIONS: &[&str] = &[
 
 // ----- matching --------------------------------------------------------------------------
 
+/// The values of a partial match: a persistent concatenation tree. The
+/// states of a long repetition share their prefixes instead of copying
+/// them; a copy per state made a value of n repetitions cost O(n²) time
+/// and memory (`grid-template-columns` with 100 000 `repeat()`s took
+/// more than 10 GB).
+#[derive(Clone, Default)]
+struct Vals(Option<Rc<Node>>);
+
+enum Node {
+    Leaf(Vec<Value>),
+    Cat(Vals, Vals),
+}
+
+impl Vals {
+    fn leaf(values: Vec<Value>) -> Vals {
+        if values.is_empty() {
+            Vals(None)
+        } else {
+            Vals(Some(Rc::new(Node::Leaf(values))))
+        }
+    }
+
+    fn one(value: Value) -> Vals {
+        Vals::leaf(vec![value])
+    }
+
+    /// `self` followed by `other`, in constant time.
+    fn cat(&self, other: &Vals) -> Vals {
+        match (&self.0, &other.0) {
+            (None, _) => other.clone(),
+            (_, None) => self.clone(),
+            _ => Vals(Some(Rc::new(Node::Cat(self.clone(), other.clone())))),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_none()
+    }
+
+    /// The values in order (iterative: a repetition makes a tree as deep
+    /// as its count).
+    fn to_vec(&self) -> Vec<Value> {
+        let mut out = Vec::new();
+        let mut stack = vec![self];
+        while let Some(v) = stack.pop() {
+            match v.0.as_deref() {
+                None => {}
+                Some(Node::Leaf(values)) => out.extend(values.iter().cloned()),
+                Some(Node::Cat(a, b)) => {
+                    stack.push(b);
+                    stack.push(a);
+                }
+            }
+        }
+        out
+    }
+}
+
+impl Drop for Node {
+    /// Unlinks the tree iteratively, so that dropping a deep one does not
+    /// overflow the stack.
+    fn drop(&mut self) {
+        let Node::Cat(a, b) = self else {
+            return;
+        };
+        let mut stack = vec![a.0.take(), b.0.take()];
+        while let Some(node) = stack.pop() {
+            if let Some(Ok(mut node)) = node.map(Rc::try_unwrap) {
+                if let Node::Cat(a, b) = &mut node {
+                    stack.push(a.0.take());
+                    stack.push(b.0.take());
+                }
+            }
+        }
+    }
+}
+
 /// The possible matches from a position: (end, values), first preferred,
 /// one per end.
-type Res = Vec<(usize, Vec<Value>)>;
+type Res = Vec<(usize, Vals)>;
 
-fn push_unique(out: &mut Res, end: usize, values: Vec<Value>) {
-    if !out.iter().any(|(e, _)| *e == end) {
-        out.push((end, values));
+/// Matches being collected, one per end, first preferred; past a few
+/// ends the seen ones go in a set, so that a repetition with n ends does
+/// not scan them n times.
+#[derive(Default)]
+struct Ends {
+    out: Res,
+    seen: Option<HashSet<usize>>,
+}
+
+impl Ends {
+    const SCAN: usize = 16;
+
+    fn contains(&self, end: usize) -> bool {
+        match &self.seen {
+            Some(seen) => seen.contains(&end),
+            None => self.out.iter().any(|(e, _)| *e == end),
+        }
+    }
+
+    fn push(&mut self, end: usize, values: Vals) {
+        if self.contains(end) {
+            return;
+        }
+        if self.seen.is_none() && self.out.len() >= Self::SCAN {
+            self.seen = Some(self.out.iter().map(|(e, _)| *e).collect());
+        }
+        if let Some(seen) = &mut self.seen {
+            seen.insert(end);
+        }
+        self.out.push((end, values));
     }
 }
 
@@ -514,36 +618,33 @@ impl Matcher {
         match g {
             G::Keyword(k) => match input.get(pos).and_then(ComponentValue::ident) {
                 Some(s) if s.eq_ignore_ascii_case(k) => {
-                    vec![(pos + 1, vec![Value::Keyword(k.clone())])]
+                    vec![(pos + 1, Vals::one(Value::Keyword(k.clone())))]
                 }
                 _ => Vec::new(),
             },
             G::Comma => match input.get(pos) {
-                Some(ComponentValue::Token(Token::Comma)) => vec![(pos + 1, vec![Value::Comma])],
+                Some(ComponentValue::Token(Token::Comma)) => vec![(pos + 1, Vals::one(Value::Comma))],
                 _ => Vec::new(),
             },
             G::Slash => match input.get(pos) {
                 Some(ComponentValue::Token(Token::Delim('/'))) => {
-                    vec![(pos + 1, vec![Value::Slash])]
+                    vec![(pos + 1, Vals::one(Value::Slash))]
                 }
                 _ => Vec::new(),
             },
             G::Type(name, range) => self.leaf(name, *range, input, pos),
             G::Seq(children) => {
-                let mut states: Res = vec![(pos, Vec::new())];
+                let mut states: Res = vec![(pos, Vals::default())];
                 for child in children {
-                    let mut next = Res::new();
+                    let mut next = Ends::default();
                     for (p, vals) in &states {
                         for (e, v) in self.m(child, input, *p) {
-                            if next.iter().any(|(q, _)| *q == e) {
-                                continue;
+                            if !next.contains(e) {
+                                next.push(e, vals.cat(&v));
                             }
-                            let mut all = vals.clone();
-                            all.extend(v);
-                            next.push((e, all));
                         }
                     }
-                    states = next;
+                    states = next.out;
                     if states.is_empty() {
                         break;
                     }
@@ -551,23 +652,23 @@ impl Matcher {
                 states
             }
             G::One(alts) => {
-                let mut out = Res::new();
+                let mut out = Ends::default();
                 for a in alts {
                     for (e, v) in self.m(a, input, pos) {
-                        push_unique(&mut out, e, v);
+                        out.push(e, v);
                     }
                 }
-                out
+                out.out
             }
             G::All(alts) => {
-                let mut out = Res::new();
+                let mut out = Ends::default();
                 self.combine(alts, true, input, pos, 0, Vec::new(), &mut out);
-                out
+                out.out
             }
             G::Any(alts) => {
-                let mut out = Res::new();
+                let mut out = Ends::default();
                 self.combine(alts, false, input, pos, 0, Vec::new(), &mut out);
-                out
+                out.out
             }
             G::Repeat(child, min, max, comma) => self.repeat(child, *min, *max, *comma, input, pos),
             G::NonEmpty(child) => self
@@ -583,9 +684,10 @@ impl Matcher {
                         .into_iter()
                         .find(|(e, _)| *e == args.len())
                     {
-                        Some((_, v)) => {
-                            vec![(pos + 1, vec![Value::Function(name.to_ascii_lowercase(), v)])]
-                        }
+                        Some((_, v)) => vec![(
+                            pos + 1,
+                            Vals::one(Value::Function(name.to_ascii_lowercase(), v.to_vec())),
+                        )],
                         None => Vec::new(),
                     }
                 }
@@ -602,15 +704,17 @@ impl Matcher {
         input: &[ComponentValue],
         pos: usize,
         used: u64,
-        acc: Vec<(usize, Vec<Value>)>,
-        out: &mut Res,
+        acc: Vec<(usize, Vals)>,
+        out: &mut Ends,
     ) {
         let full = (1u64 << alts.len()) - 1;
         if (all && used == full) || (!all && used != 0) {
             let mut sorted = acc.clone();
             sorted.sort_by_key(|(i, _)| *i);
-            let vals: Vec<Value> = sorted.into_iter().flat_map(|(_, v)| v).collect();
-            push_unique(out, pos, vals);
+            let vals = sorted
+                .iter()
+                .fold(Vals::default(), |vals, (_, v)| vals.cat(v));
+            out.push(pos, vals);
         }
         if used == full {
             return;
@@ -641,14 +745,14 @@ impl Matcher {
         input: &[ComponentValue],
         pos: usize,
     ) -> Res {
-        let mut results = Res::new();
+        let mut results = Ends::default();
         if min == 0 {
-            results.push((pos, Vec::new()));
+            results.push(pos, Vals::default());
         }
-        let mut frontier: Res = vec![(pos, Vec::new())];
+        let mut frontier: Res = vec![(pos, Vals::default())];
         let mut count = 0;
         while count < max && !frontier.is_empty() && count <= input.len() {
-            let mut next = Res::new();
+            let mut next = Ends::default();
             for (p, vals) in &frontier {
                 let mut start = *p;
                 if comma && count > 0 {
@@ -658,29 +762,25 @@ impl Matcher {
                     start += 1;
                 }
                 for (e, v) in self.m(child, input, start) {
-                    if e == start {
-                        continue;
-                    }
-                    if next.iter().any(|(q, _)| *q == e) {
+                    if e == start || next.contains(e) {
                         continue;
                     }
                     let mut all = vals.clone();
                     if comma && count > 0 {
-                        all.push(Value::Comma);
+                        all = all.cat(&Vals::one(Value::Comma));
                     }
-                    all.extend(v);
-                    next.push((e, all));
+                    next.push(e, all.cat(&v));
                 }
             }
             count += 1;
             if count >= min {
-                for (e, v) in &next {
-                    push_unique(&mut results, *e, v.clone());
+                for (e, v) in &next.out {
+                    results.push(*e, v.clone());
                 }
             }
-            frontier = next;
+            frontier = next.out;
         }
-        results
+        results.out
     }
 
     fn leaf(&self, name: &str, range: Range, input: &[ComponentValue], pos: usize) -> Res {
@@ -694,7 +794,7 @@ impl Matcher {
             return Vec::new();
         };
         let one = |v: Option<Value>| match v {
-            Some(v) => vec![(pos + 1, vec![v])],
+            Some(v) => vec![(pos + 1, Vals::one(v))],
             None => Vec::new(),
         };
         if let Some(ty) = numeric_type(name) {
@@ -767,7 +867,7 @@ pub fn match_grammar(g: &G, input: &[ComponentValue]) -> Option<Vec<Value>> {
     m.m(g, input, 0)
         .into_iter()
         .find(|(e, _)| *e == input.len())
-        .map(|(_, v)| v)
+        .map(|(_, v)| v.to_vec())
 }
 
 /// Matches component values (whitespace allowed) against a grammar
@@ -888,6 +988,21 @@ mod tests {
 
     fn m(src: &str, text: &str) -> Option<String> {
         match_str(src, &parse_component_values(text)).map(|v| serialize_list(&v))
+    }
+
+    #[test]
+    fn long_repetitions_stay_linear() {
+        // css/css-grid/parsing/grid-template-columns-crash.html sets 100 000
+        // `repeat()`s; copying the values per state made this quadratic.
+        let n = 50_000;
+        let text: String = (0..n).map(|i| format!(" repeat(2, {i}px)")).collect();
+        let tokens = crate::css::tokenizer::tokenize(&text);
+        let values = parse_property("grid-template-columns", &tokens)
+            .expect("grid-template-columns has a grammar")
+            .expect("the track list matches");
+        assert_eq!(values.len(), n);
+        assert_eq!(serialize_list(&values[..2]), "repeat(2, 0px) repeat(2, 1px)");
+        assert_eq!(m("<length>+", &"1px ".repeat(n)).map(|s| s.len()), Some(4 * n - 1));
     }
 
     #[test]

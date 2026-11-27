@@ -344,9 +344,16 @@ fn split_fallback(args: &[Token]) -> (&[Token], Option<&[Token]>) {
     (args, None)
 }
 
+/// The UA-defined limit on the length of a substituted value, in tokens
+/// (css-variables-1 §3.3 "Safely Handling Overly-Long Variables"): a
+/// longer substitution is invalid at computed-value time. Without it,
+/// `--v1: var(--v0) var(--v0)` repeated 31 times grows to 2³¹ tokens.
+pub const MAX_SUBSTITUTION_TOKENS: usize = 1 << 16;
+
 /// Replaces every `var()` and `attr()` in `value` (css-variables-1 §3,
 /// css-values-5 §7.7); `Err(Invalid)` when a reference has neither a
-/// value nor a fallback.
+/// value nor a fallback, or when the result would be longer than
+/// [`MAX_SUBSTITUTION_TOKENS`].
 pub fn substitute(value: &[Token], s: &Substitution) -> Result<Vec<Token>, Invalid> {
     let mut out = Vec::with_capacity(value.len());
     let mut i = 0;
@@ -369,6 +376,9 @@ pub fn substitute(value: &[Token], s: &Substitution) -> Result<Vec<Token>, Inval
         } else {
             substitute_attr(args, s)?
         };
+        if out.len() + replacement.len() + (value.len() - close - 1) > MAX_SUBSTITUTION_TOKENS {
+            return Err(Invalid);
+        }
         out.extend(replacement);
         i = close + 1;
     }
@@ -734,6 +744,28 @@ mod tests {
         assert!(Syntax::parse("<transform-list>+").is_none());
         assert!(Syntax::parse("inherit").is_none());
         assert_eq!(Syntax::parse(" * "), Some(Syntax::Universal));
+    }
+
+    #[test]
+    fn overly_long_substitution_is_invalid() {
+        // css/css-variables/variable-exponential-blowup.html: --v31 would
+        // hold 2³¹ copies of --v0.
+        let mut specified = vec![("--v0".to_string(), tokenize("\"long\""))];
+        for i in 0..31 {
+            specified.push((format!("--v{}", i + 1), tokenize(&format!("var(--v{i}) var(--v{i})"))));
+        }
+        let out = compute_custom_properties(
+            &specified,
+            &HashMap::new(),
+            &Registry::default(),
+            &Context::default(),
+            &no_attr,
+        );
+        assert_eq!(out["--v1"].len(), 3);
+        assert!(out["--v14"].len() <= MAX_SUBSTITUTION_TOKENS);
+        assert!(!out.contains_key("--v16") && !out.contains_key("--v31"));
+        assert!(substitute_with(&tokenize("var(--v31)"), &out, &no_attr).is_err());
+        assert!(substitute_with(&tokenize("var(--v31, none)"), &out, &no_attr).is_ok());
     }
 
     #[test]
