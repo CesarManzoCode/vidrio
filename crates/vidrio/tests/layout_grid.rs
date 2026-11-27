@@ -241,6 +241,11 @@ fn nested_subgrid_items_size_the_outer_tracks() {
         "50px 120px 150px"
     );
     assert_eq!(template(&d, &t, "g", "grid-template-rows"), "20px 40px");
-    assert_eq!(template(&d, &t, "s", "grid-template-columns"), "subgrid");
+    // css-grid-2 §7.2.6.2: one line name set per line of the subgrid,
+    // empty ones included.
+    assert_eq!(
+        template(&d, &t, "s", "grid-template-columns"),
+        "subgrid [] [] [] []"
+    );
     assert_eq!(template(&d, &t, "t", "grid-template-rows"), "40px");
 }

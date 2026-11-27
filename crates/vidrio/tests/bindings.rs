@@ -246,8 +246,10 @@ static OVERLOADED: Operation = Operation {
 #[test]
 fn overload_resolution() {
     let (mut agent, realm) = window(PAGE);
-    let s = Value::String(agent.heap.alloc_str("x"));
     let node = vjs::evaluate_script_in(&mut agent, realm, "document.body").expect("body");
+    // Allocated after the script: running it is a safe point, where an
+    // unrooted string would be collected.
+    let s = Value::String(agent.heap.alloc_str("x"));
 
     let r = resolve(&mut agent, &OVERLOADED, &[Value::Number(3.0)]).expect("long");
     assert_eq!(r.overload.index, 0);
@@ -402,4 +404,26 @@ fn dataset_maps_data_attributes() {
 })()"#,
     );
     assert_eq!(r, "true,url,runType,x,SyntaxError,false,false");
+}
+
+#[test]
+fn indexed_collections_are_iterable() {
+    let (mut agent, realm) = window(PAGE);
+    let r = run(
+        &mut agent,
+        realm,
+        r#"(function () {
+  var p = document.getElementById("x");
+  p.setAttribute("class", "c");
+  var out = [];
+  out.push(HTMLCollection.prototype[Symbol.iterator] === Array.prototype.values);
+  out.push(NamedNodeMap.prototype[Symbol.iterator] === Array.prototype.values);
+  out.push(Object.getOwnPropertyDescriptor(HTMLCollection.prototype, Symbol.iterator).enumerable);
+  for (var e of document.getElementsByTagName("p")) out.push(e.id);
+  out.push([...p.attributes].map(a => a.name).join("|"));
+  out.push(Symbol.iterator in Node.prototype);
+  return out.join(",");
+})()"#,
+    );
+    assert_eq!(r, "true,true,false,x,id|class,false");
 }

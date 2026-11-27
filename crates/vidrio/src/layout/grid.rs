@@ -2260,6 +2260,7 @@ impl<'a> Grid<'a> {
         let cb = Cb {
             width: aw,
             height: None,
+            rtl: self.rtl,
         };
         let spec = block::specified_height(s, cb, bp.vertical());
         if it.sub.is_some() {
@@ -2640,6 +2641,7 @@ pub(super) fn layout(
         let cb = Cb {
             width: area.width,
             height: Some(area.height),
+            rtl: g.rtl,
         };
         let (ap, _) = align_self(is, s);
         let spec_h = block::specified_height(is, cb, ibp.vertical());

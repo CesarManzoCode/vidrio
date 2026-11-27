@@ -926,6 +926,7 @@ mod tests {
         assert_eq!(d("flow-root inline").as_deref(), Some("inline-block"));
         assert_eq!(d("list-item block flow").as_deref(), Some("list-item"));
         assert_eq!(d("inline list-item").as_deref(), Some("inline list-item"));
-        assert_eq!(d("block block"), Some(None));
+        let invalid = crate::css::tokenizer::tokenize("block block");
+        assert_eq!(specified("display", &invalid), Some(None));
     }
 }

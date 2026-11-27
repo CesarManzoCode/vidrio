@@ -945,6 +945,7 @@ pub(super) fn layout(
     let cb = Cb {
         width: w,
         height: cbh,
+        rtl: s.rtl(),
     };
     let gap = |name: &str, basis: Option<f64>| {
         values::lp(s, name)

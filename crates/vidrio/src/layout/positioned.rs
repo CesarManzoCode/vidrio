@@ -553,6 +553,7 @@ fn layout_absolute(ctx: &mut Ctx, b: &BoxNode, cb: Rect, rtl: bool, st: Rect) ->
     let ccb = Cb {
         width: cb.width,
         height: Some(cb.height),
+        rtl,
     };
     let h_axis = Axis {
         total: cb.width,

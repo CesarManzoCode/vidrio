@@ -10,6 +10,7 @@
 //! garbage collector's safe points outside a root set.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 
 use vjs::function::{create_native_function, is_callable, native_host_data};
@@ -57,6 +58,9 @@ pub fn context_of_handle(handle: &str) -> Option<ContextId> {
 #[derive(Default)]
 pub struct ElementStore {
     entries: Vec<(String, Weak<RefCell<Document>>, NodeId)>,
+    /// The references of the documents that are gone: still known, so
+    /// they are stale rather than unknown.
+    gone: HashSet<String>,
     seed: u32,
     next: u64,
 }
@@ -78,6 +82,7 @@ impl ElementStore {
             .unwrap_or(0);
         ElementStore {
             entries: Vec::new(),
+            gone: HashSet::new(),
             seed,
             next: 1,
         }
@@ -92,8 +97,15 @@ impl ElementStore {
         {
             return id.clone();
         }
-        // Drop the entries of documents that are gone.
-        self.entries.retain(|(_, d, _)| d.strong_count() > 0);
+        // Move the entries of documents that are gone to `gone`.
+        let gone = &mut self.gone;
+        self.entries.retain(|(id, d, _)| {
+            let live = d.strong_count() > 0;
+            if !live {
+                gone.insert(id.clone());
+            }
+            live
+        });
         let id = format!(
             "{:08x}-{:04x}-4{:03x}-8{:03x}-{:012x}",
             self.seed,
@@ -109,6 +121,7 @@ impl ElementStore {
 
     pub fn resolve(&self, id: &str) -> Known {
         match self.entries.iter().find(|(x, _, _)| x == id) {
+            None if self.gone.contains(id) => Known::Gone,
             None => Known::Unknown,
             Some((_, d, n)) => match d.upgrade() {
                 Some(d) => Known::Node(d, *n),
@@ -592,6 +605,12 @@ mod tests {
         ));
         assert!(matches!(store.resolve("other"), Known::Unknown));
         drop(doc);
+        assert!(matches!(store.resolve(&a), Known::Gone));
+        // A new reference prunes the gone entry; its reference stays
+        // known (stale), not unknown.
+        let other: DocRef = Rc::new(RefCell::new(Document::new_html()));
+        let b = store.reference(&other, NodeId::DOCUMENT);
+        assert_ne!(a, b);
         assert!(matches!(store.resolve(&a), Known::Gone));
     }
 }

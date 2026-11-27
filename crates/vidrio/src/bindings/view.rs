@@ -5,7 +5,9 @@
 //! window, `elementFromPoint`, `elementsFromPoint`,
 //! `caretPositionFromPoint` (`CaretPosition`), `scrollingElement`,
 //! `innerWidth`/`innerHeight`, `scrollX`/`scrollY` (and `pageXOffset`/
-//! `pageYOffset`), `devicePixelRatio` (always 1) and `screen`.
+//! `pageYOffset`), `outerWidth`/`outerHeight` (the top-level viewport),
+//! `screenX`/`screenY`/`screenLeft`/`screenTop` (always 0),
+//! `devicePixelRatio` (always 1) and `screen`.
 //!
 //! Scrolling is instant whatever `behavior` says, so the promises the
 //! scroll methods return are already resolved with
@@ -336,11 +338,27 @@ fn window(agent: &mut Agent, state: &Rc<RealmState>, inv: &Invocation, member: &
             | "scrollBy"
             | "get_devicePixelRatio"
             | "get_screen"
+            | "get_outerWidth"
+            | "get_outerHeight"
+            | "get_screenX"
+            | "get_screenLeft"
+            | "get_screenY"
+            | "get_screenTop"
     ) {
         return None;
     }
     if member == "get_devicePixelRatio" {
         return Some(Ok(IdlValue::Double(1.0)));
+    }
+    // The client window has no browser UI around the top-level viewport
+    // and sits at the origin of the screen (vault/CONTRACT.md §3.5).
+    match member {
+        "get_outerWidth" => return Some(Ok(IdlValue::Int(i64::from(view::viewport().0)))),
+        "get_outerHeight" => return Some(Ok(IdlValue::Int(i64::from(view::viewport().1)))),
+        "get_screenX" | "get_screenLeft" | "get_screenY" | "get_screenTop" => {
+            return Some(Ok(IdlValue::Int(0)));
+        }
+        _ => {}
     }
     if member == "get_screen" {
         // [SameObject]: the window keeps its `Screen`.

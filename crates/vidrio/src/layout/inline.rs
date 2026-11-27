@@ -1777,6 +1777,7 @@ pub(crate) fn layout(
     let cb = Cb {
         width: place.width,
         height: place.cb_height,
+        rtl: style.rtl(),
     };
     let mode = Mode::Layout(cb);
     let p = prepare(ctx, ic, style, None, &mode);

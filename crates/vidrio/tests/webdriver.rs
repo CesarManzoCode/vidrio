@@ -236,6 +236,44 @@ fn wptrunner_testharness_sequence_over_http() {
     assert_eq!(rect.get("width"), Some(&Json::Number(800.0)));
     assert_eq!(rect.get("height"), Some(&Json::Number(600.0)));
     c.ok("POST", "/timeouts", Some(r#"{"script":10000}"#));
+
+    // The reftest executor's do_test: the window chrome, then the window
+    // moved to (0, 0) and sized to 800×600 plus that chrome.
+    let chrome = c.execute(
+        "return [window.outerWidth - window.innerWidth, \
+         window.outerHeight - window.innerHeight, window.screenX, window.screenTop];",
+        "[]",
+    );
+    assert_eq!(chrome.serialize(), "[0,0,0,0]");
+    let moved = c.ok(
+        "POST",
+        "/window/rect",
+        Some(r#"{"x":0,"y":0,"width":null,"height":null}"#),
+    );
+    assert_eq!(moved, rect);
+    let sized = c.ok(
+        "POST",
+        "/window/rect",
+        Some(r#"{"width":800,"height":600}"#),
+    );
+    assert_eq!(sized, rect);
+    // A fixed window stays as it is, as close as possible to the request.
+    assert_eq!(
+        c.ok(
+            "POST",
+            "/window/rect",
+            Some(r#"{"width":1024,"height":768}"#)
+        ),
+        rect
+    );
+    for bad in [
+        r#"{"width":-1}"#,
+        r#"{"height":"600"}"#,
+        r#"{"x":2147483648}"#,
+        r#"{"y":true}"#,
+    ] {
+        c.fails("POST", "/window/rect", Some(bad), 400, "invalid argument");
+    }
     let runner = c.ok("GET", "/window", None).as_str().unwrap().to_string();
     let url = format!("http://{pages}/runner.html");
     assert_eq!(
@@ -308,6 +346,16 @@ fn wptrunner_testharness_sequence_over_http() {
     assert_eq!(message.get("status"), Some(&Json::str("complete")));
     assert_eq!(message.get("n"), Some(&Json::Number(42.0)));
     assert_eq!(message.get("loaded"), Some(&Json::Bool(true)));
+    // The reftest wait script (test-wait.js) waits two animation frames;
+    // on the real clock the first rendering opportunity must come.
+    c.ok("POST", "/timeouts", Some(r#"{"script":3000}"#));
+    let raf = c.execute_async(
+        "const cb = arguments[arguments.length - 1];\n\
+         requestAnimationFrame(() => requestAnimationFrame(t => cb(typeof t)));",
+        "[]",
+    );
+    assert_eq!(raf, Json::str("number"));
+    c.ok("POST", "/timeouts", Some(r#"{"script":10000}"#));
     // A returned promise settles a synchronous script too.
     assert_eq!(
         c.execute("return Promise.resolve(arguments[0] * 2);", "[21]"),

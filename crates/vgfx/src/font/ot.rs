@@ -219,8 +219,29 @@ pub fn select_lookups(
         let scripts = u16_at(d, 4)? as usize;
         let feats = u16_at(d, 6)? as usize;
         let nscripts = u16_at(d, scripts)? as usize;
-        let mut script_off = None;
-        for want in [
+        // The LangSys a script table offers for `lang` (or its default),
+        // if it selects at least one feature.
+        let langsys_of = |s: usize| -> Option<usize> {
+            let mut langsys = u16_at(d, s)? as usize;
+            if let Some(lang) = lang {
+                let n = u16_at(d, s + 2)? as usize;
+                for i in 0..n {
+                    let rec = s + 4 + 6 * i;
+                    if u32_at(d, rec)? == lang.0 {
+                        langsys = u16_at(d, rec + 4)? as usize;
+                    }
+                }
+            }
+            if langsys == 0 {
+                return None;
+            }
+            let ls = s + langsys;
+            (u16_at(d, ls + 2)? != 0xffff || u16_at(d, ls + 4)? != 0).then_some(ls)
+        };
+        // A script that selects no feature (Liberation Sans 2.1 has an
+        // empty `DFLT`) does not stop the fallback.
+        let mut chosen = None;
+        'search: for want in [
             script,
             Tag::new(b"DFLT"),
             Tag::new(b"dflt"),
@@ -229,29 +250,17 @@ pub fn select_lookups(
             for i in 0..nscripts {
                 let rec = scripts + 2 + 6 * i;
                 if u32_at(d, rec)? == want.0 {
-                    script_off = Some(scripts + u16_at(d, rec + 4)? as usize);
+                    chosen = langsys_of(scripts + u16_at(d, rec + 4)? as usize);
+                    if chosen.is_some() {
+                        break 'search;
+                    }
                     break;
                 }
             }
-            if script_off.is_some() {
-                break;
-            }
         }
-        let s = script_off?;
-        let mut langsys = u16_at(d, s)? as usize;
-        if let Some(lang) = lang {
-            let n = u16_at(d, s + 2)? as usize;
-            for i in 0..n {
-                let rec = s + 4 + 6 * i;
-                if u32_at(d, rec)? == lang.0 {
-                    langsys = u16_at(d, rec + 4)? as usize;
-                }
-            }
-        }
-        if langsys == 0 {
+        let Some(ls) = chosen else {
             return Some(Vec::new());
-        }
-        let ls = s + langsys;
+        };
         let required = u16_at(d, ls + 2)?;
         let n = u16_at(d, ls + 4)? as usize;
         let nfeats = u16_at(d, feats)? as usize;
@@ -1193,5 +1202,43 @@ mod tests {
         assert_eq!(glyphs, vec![9, 3]);
         assert_eq!(buf.info[1].cluster, 2);
         assert!(select_lookups(&t, Tag::new(b"latn"), None, &[(Tag::new(b"liga"), 0)]).is_empty());
+    }
+
+    #[test]
+    fn empty_default_script_falls_back_to_latn() {
+        let mut t = Vec::new();
+        // Header: version 1.0, ScriptList at 10, FeatureList at 46.
+        for x in [1u16, 0, 10, 46, 0] {
+            w(&mut t, x);
+        }
+        // ScriptList: 'DFLT' at +14, 'latn' at +24.
+        w(&mut t, 2);
+        t.extend_from_slice(b"DFLT");
+        w(&mut t, 14);
+        t.extend_from_slice(b"latn");
+        w(&mut t, 24);
+        // 'DFLT': default LangSys at +4 with no required and no features.
+        for x in [4u16, 0, 0, 0xffff, 0] {
+            w(&mut t, x);
+        }
+        // 'latn': default LangSys at +4 with feature index 0.
+        for x in [4u16, 0, 0, 0xffff, 1, 0] {
+            w(&mut t, x);
+        }
+        // FeatureList: 'liga' at +8, lookup index 3.
+        w(&mut t, 1);
+        t.extend_from_slice(b"liga");
+        for x in [8u16, 0, 1, 3] {
+            w(&mut t, x);
+        }
+        let liga = [(Tag::new(b"liga"), 1)];
+        assert_eq!(
+            select_lookups(&t, Tag::new(b"DFLT"), None, &liga),
+            vec![(3, 1)]
+        );
+        assert_eq!(
+            select_lookups(&t, Tag::new(b"arab"), None, &liga),
+            vec![(3, 1)]
+        );
     }
 }

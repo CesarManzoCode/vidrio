@@ -513,7 +513,37 @@ fn define_iterable(agent: &mut Agent, state: &RealmState, proto: Object, id: Id)
     let realm = state.realm;
     let iterator = PropertyKey::Symbol(agent.symbols.iterator);
     match &def.iterable {
-        Iterable::None => {}
+        Iterable::None => {
+            // An indexed getter and an integer `length` make the interface
+            // iterable with %Array.prototype.values% (Web IDL §3.7.6).
+            let integer_length = def.attributes.iter().any(|a| {
+                a.name == "length"
+                    && !a.is_static
+                    && matches!(
+                        a.ty,
+                        Ty::Byte
+                            | Ty::Octet
+                            | Ty::Short
+                            | Ty::UnsignedShort
+                            | Ty::Long
+                            | Ty::UnsignedLong
+                            | Ty::LongLong
+                            | Ty::UnsignedLongLong
+                    )
+            });
+            if def.special.indexed_getter.is_some() && integer_length {
+                let values = intrinsic(agent, realm, Intrinsic::ArrayPrototypeValues);
+                define(
+                    agent,
+                    proto,
+                    iterator,
+                    Value::Object(values),
+                    true,
+                    false,
+                    true,
+                );
+            }
+        }
         Iterable::Value(_) => {
             let array_proto = intrinsic(agent, realm, Intrinsic::ArrayPrototype);
             for name in ["entries", "keys", "values", "forEach"] {

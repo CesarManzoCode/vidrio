@@ -793,8 +793,9 @@ pub fn decompress_limited(data: &[u8], limit: usize) -> Result<Vec<u8>, BrotliEr
     };
     let max_backward = (1usize << wbits) - 16;
     let mut out: Vec<u8> = Vec::new();
-    // Distance ring buffer: last, second last, third, fourth.
-    let mut dist_rb = [4usize, 11, 15, 16];
+    // Distance ring buffer, oldest first: the last distance is 4, then
+    // 11, 15 and 16 (§4); slot `dist_rb_idx - 1` holds the last one.
+    let mut dist_rb = [16usize, 15, 11, 4];
     let mut dist_rb_idx = 0usize;
     loop {
         let is_last = br.read(1)? == 1;
@@ -1086,7 +1087,9 @@ the quick brown fox jumps over the lazy dog. time down life";
     fn transforms_table_matches_appendix_b() {
         assert_eq!(TRANSFORMS[0], (&b""[..], 0, &b""[..]));
         assert_eq!(TRANSFORMS[1], (&b""[..], 0, &b" "[..]));
-        assert_eq!(TRANSFORMS[120].1, 11);
+        // ID 120 is `" " UppercaseFirst "='"`, as in libbrotli 1.2.1's
+        // `BrotliGetTransforms()`.
+        assert_eq!(TRANSFORMS[120], (&b" "[..], 10, &b"='"[..]));
     }
 
     #[test]

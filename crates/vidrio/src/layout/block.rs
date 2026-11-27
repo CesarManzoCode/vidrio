@@ -38,6 +38,9 @@ const EPS: f64 = 1e-7;
 pub(crate) struct Cb {
     pub width: f64,
     pub height: Option<f64>,
+    /// The containing block's `direction` is `rtl`: it decides which
+    /// margin gives way when they are over-constrained (CSS 2 §10.3.3).
+    pub rtl: bool,
 }
 
 /// Adjoining margins (CSS 2 §8.3.1): the largest positive and the most
@@ -321,6 +324,7 @@ pub(super) fn replaced_size(
     let cb = Cb {
         width: cbw.unwrap_or(0.0),
         height: cbh,
+        rtl: s.rtl(),
     };
     let sh = specified_height(s, cb, bp.vertical());
     let (auto, given) = values::aspect_ratio(s);
@@ -527,10 +531,10 @@ fn block_width(
     b: &BoxNode,
     cbw: f64,
     cbh: Option<f64>,
+    rtl: bool,
     m: &Model,
 ) -> (f64, f64, f64) {
     let bp_h = m.bp().horizontal();
-    let rtl = b.style.rtl();
     let solve = |w: Option<f64>| -> (f64, f64, f64) {
         let (ml, mr) = (m.margin.left, m.margin.right);
         match w {
@@ -598,6 +602,7 @@ pub(super) fn ratio_dependent_width(
     let cb = Cb {
         width: cbw,
         height: cbh,
+        rtl: s.rtl(),
     };
     let h = specified_height(s, cb, bp.vertical())?;
     let h = clamp_height(s, h, cbh, bp.vertical(), h);
@@ -911,6 +916,7 @@ fn layout_contents(
             let cb = Cb {
                 width: w,
                 height: cbh,
+                rtl: b.style.rtl(),
             };
             for child in children {
                 if values::out_of_flow(&child.style) {
@@ -1036,7 +1042,7 @@ fn flow_block(
     let s = &b.style;
     let m = Model::of(s, cb.width);
     let bp = m.bp();
-    let (w, ml, mr) = block_width(ctx, b, cb.width, cb.height, &m);
+    let (w, ml, mr) = block_width(ctx, b, cb.width, cb.height, cb.rtl, &m);
     let bx = cb_x + ml;
     let mt = m.margin.top.unwrap_or(0.0);
     let mb = m.margin.bottom.unwrap_or(0.0);
@@ -1168,7 +1174,8 @@ fn flow_independent(
         let narrowed = l > cb_left + EPS || r < cb_right - EPS;
         // The width and margins for the space beside the floats.
         let (w, ml, mr, x) = if !narrowed {
-            let (w, ml, mr, h_override) = independent_width(ctx, b, cb.width, cb.height, &m);
+            let (w, ml, mr, h_override) =
+                independent_width(ctx, b, cb.width, cb.height, cb.rtl, &m);
             let _ = h_override;
             (w, ml, mr, cb_left + ml)
         } else {
@@ -1182,6 +1189,7 @@ fn flow_independent(
                 b,
                 space + bp.horizontal(),
                 cb.height,
+                cb.rtl,
                 &Model {
                     margin: Margins {
                         left: Some(0.0),
@@ -1221,7 +1229,7 @@ fn flow_independent(
         band_h = border_h;
     }
     let (mut frag, x, ml, mr) = result.unwrap_or_else(|| {
-        let (w, ml, mr, _) = independent_width(ctx, b, cb.width, cb.height, &m);
+        let (w, ml, mr, _) = independent_width(ctx, b, cb.width, cb.height, cb.rtl, &m);
         let (frag, _) = independent_box(ctx, b, w, cb);
         (frag, cb_left + ml, ml, mr)
     });
@@ -1240,6 +1248,7 @@ fn independent_width(
     b: &BoxNode,
     cbw: f64,
     cbh: Option<f64>,
+    rtl: bool,
     m: &Model,
 ) -> (f64, f64, f64, Option<f64>) {
     match &b.kind {
@@ -1247,7 +1256,6 @@ fn independent_width(
             let (w, h) = replaced_size(ctx, b, r, Some(cbw), cbh);
             let bp_h = m.bp().horizontal();
             let rest = cbw - w - bp_h;
-            let rtl = b.style.rtl();
             let (ml, mr) = match (m.margin.left, m.margin.right) {
                 (None, None) => {
                     if rest < 0.0 {
@@ -1269,7 +1277,7 @@ fn independent_width(
             (w, ml, mr, Some(h))
         }
         BoxKind::Container(_) => {
-            let (w, ml, mr) = block_width(ctx, b, cbw, cbh, m);
+            let (w, ml, mr) = block_width(ctx, b, cbw, cbh, rtl, m);
             (w, ml, mr, None)
         }
     }
@@ -1371,6 +1379,7 @@ pub(super) fn layout_alone(ctx: &mut Ctx, b: &BoxNode, cbw: f64) -> (Fragment, f
     let cb = Cb {
         width: cbw,
         height: None,
+        rtl: b.style.rtl(),
     };
     let mut flow = Flow::new(0.0);
     let mut floats = FloatContext::default();
@@ -1384,9 +1393,11 @@ pub(super) fn layout_alone(ctx: &mut Ctx, b: &BoxNode, cbw: f64) -> (Fragment, f
 
 /// Lays out the root element's box in the initial containing block.
 pub(crate) fn layout_root(ctx: &mut Ctx, root: &BoxNode, viewport: (f64, f64)) -> Fragment {
+    // The initial containing block has the root's direction (CSS 2 §10.1).
     let cb = Cb {
         width: viewport.0,
         height: Some(viewport.1),
+        rtl: root.style.rtl(),
     };
     let mut flow = Flow::new(0.0);
     let mut floats = FloatContext::default();

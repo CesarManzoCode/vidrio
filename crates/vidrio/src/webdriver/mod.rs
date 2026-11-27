@@ -754,10 +754,13 @@ impl Driver {
                 self.top_context()?;
                 done(window_rect())
             }
-            SetWindowRect => Err(WdError::new(
-                ErrorCode::UnsupportedOperation,
-                "the window rect is fixed at 800×600",
-            )),
+            SetWindowRect => {
+                set_window_rect_args(body)?;
+                self.top_context()?;
+                // The window stays at 800×600 in (0, 0): that is "as close
+                // as possible" to any rect for a window of fixed size.
+                done(window_rect())
+            }
             SwitchToFrame => self
                 .switch_to_frame(body)
                 .map(|_| Outcome::Done(Ok(Json::Null))),
@@ -1149,6 +1152,30 @@ fn window_rect() -> Json {
         ("width", Json::Number(f64::from(VIEWPORT_WIDTH))),
         ("height", Json::Number(f64::from(VIEWPORT_HEIGHT))),
     ])
+}
+
+/// Validates the parameters of Set Window Rect (WebDriver §11.8.2):
+/// `width` and `height` are null or a number from 0 to 2^31−1, `x` and
+/// `y` null or a number from −2^31 to 2^31−1.
+fn set_window_rect_args(body: &Json) -> WdResult<()> {
+    let max = f64::from(i32::MAX);
+    for (name, min) in [
+        ("width", 0.0),
+        ("height", 0.0),
+        ("x", f64::from(i32::MIN)),
+        ("y", f64::from(i32::MIN)),
+    ] {
+        match body.get(name) {
+            None | Some(Json::Null) => {}
+            Some(Json::Number(n)) if (min..=max).contains(n) => {}
+            Some(_) => {
+                return invalid_argument(&format!(
+                    "{name} must be null or a number from {min} to {max}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether the window of `ctx` still has the realm the script ran in.

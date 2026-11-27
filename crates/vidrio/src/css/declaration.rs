@@ -1188,7 +1188,7 @@ fn serialize_number(n: &Numeric) -> String {
 
 /// The kinds of token the comment table of CSS Syntax §9 tells apart.
 #[derive(Clone, Copy, PartialEq)]
-enum Kind {
+enum TokenKind {
     Ident,
     Function,
     Url,
@@ -1203,27 +1203,27 @@ enum Kind {
     Other,
 }
 
-fn kind(t: &Token) -> Kind {
+fn kind(t: &Token) -> TokenKind {
     match t {
-        Token::Ident(_) => Kind::Ident,
-        Token::Function(_) => Kind::Function,
-        Token::Url(_) | Token::BadUrl => Kind::Url,
-        Token::Number(_) => Kind::Number,
-        Token::Percentage(_) => Kind::Percentage,
-        Token::Dimension(..) => Kind::Dimension,
-        Token::AtKeyword(_) => Kind::AtKeyword,
-        Token::Hash { .. } => Kind::Hash,
-        Token::Cdc => Kind::Cdc,
-        Token::LeftParen => Kind::LeftParen,
-        Token::Delim(c) => Kind::Delim(*c),
-        _ => Kind::Other,
+        Token::Ident(_) => TokenKind::Ident,
+        Token::Function(_) => TokenKind::Function,
+        Token::Url(_) | Token::BadUrl => TokenKind::Url,
+        Token::Number(_) => TokenKind::Number,
+        Token::Percentage(_) => TokenKind::Percentage,
+        Token::Dimension(..) => TokenKind::Dimension,
+        Token::AtKeyword(_) => TokenKind::AtKeyword,
+        Token::Hash { .. } => TokenKind::Hash,
+        Token::Cdc => TokenKind::Cdc,
+        Token::LeftParen => TokenKind::LeftParen,
+        Token::Delim(c) => TokenKind::Delim(*c),
+        _ => TokenKind::Other,
     }
 }
 
 /// True if a comment must separate `a` and `b` so that the text
 /// tokenizes back to the same tokens (CSS Syntax §9).
-fn needs_comment(a: Kind, b: Kind) -> bool {
-    use Kind::*;
+fn needs_comment(a: TokenKind, b: TokenKind) -> bool {
+    use TokenKind::*;
     let identish = matches!(b, Ident | Function | Url);
     let numeric = matches!(b, Number | Percentage | Dimension);
     match a {
@@ -1242,7 +1242,7 @@ fn needs_comment(a: Kind, b: Kind) -> bool {
 /// Serializes component values back to text.
 pub fn serialize_tokens(tokens: &[Token]) -> String {
     let mut out = String::new();
-    let mut prev: Option<Kind> = None;
+    let mut prev: Option<TokenKind> = None;
     for t in tokens {
         let k = kind(t);
         if t == &Token::Whitespace {

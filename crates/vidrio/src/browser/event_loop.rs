@@ -573,11 +573,14 @@ fn frame_requested(agent: &Agent, ua: &UserAgent) -> bool {
     false
 }
 
-/// The time of the next rendering opportunity after the last one.
+/// The time of the next rendering opportunity after the last one. Before
+/// the first frame it is already due: reading the clock here instead
+/// would give a time later than the caller's `now` on the real clock, so
+/// the first frame would never come.
 fn next_frame_time(ua: &UserAgent) -> f64 {
     let last = ua.event_loop.last_frame.get();
     if last == f64::NEG_INFINITY {
-        return ua.event_loop.clock.now();
+        return f64::NEG_INFINITY;
     }
     ((last / FRAME_INTERVAL).floor() + 1.0) * FRAME_INTERVAL
 }

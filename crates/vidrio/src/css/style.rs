@@ -208,6 +208,13 @@ fn build_initial() -> Rc<ComputedStyle> {
             reset.push(Rc::new(v));
         }
     }
+    // The initial `border-style` is `none`, so the computed initial
+    // border widths are 0, not `medium` (see `Computer::fix_up`).
+    for side in ["top", "right", "bottom", "left"] {
+        if let Some((false, s)) = slot(&format!("border-{side}-width")) {
+            reset[s] = Rc::new(CValue::length(0.0));
+        }
+    }
     let mut style = ComputedStyle {
         inherited: Rc::new(Group(inherited)),
         reset: Rc::new(Group(reset)),
@@ -434,14 +441,18 @@ impl Computer<'_> {
 
     /// The fix-ups of computed values that depend on other properties.
     fn fix_up(&mut self, is_root: bool) {
-        // A border side whose style is `none` or `hidden` has no width.
+        // A border side whose style is `none` or `hidden` has no width;
+        // otherwise a width left at its initial value is `medium` (the
+        // initial group holds 0, the width under the initial style).
         for side in ["top", "right", "bottom", "left"] {
             let style = self.keyword(&format!("border-{side}-style"));
+            let width = format!("border-{side}-width");
             if style == "none" || style == "hidden" {
-                self.set(
-                    &format!("border-{side}-width"),
-                    Rc::new(CValue::length(0.0)),
-                );
+                self.set(&width, Rc::new(CValue::length(0.0)));
+            } else if matches!(self.specified(&width), Spec::Initial | Spec::Unset) {
+                if let Some(v) = compute_tokens(&width, &tokenize("medium"), &self.ctx) {
+                    self.set(&width, Rc::new(v));
+                }
             }
         }
         // Absolutely positioned boxes do not float; the root, floats and
@@ -915,6 +926,27 @@ mod tests {
         assert_eq!(t.text("background-color"), "rgb(255, 0, 0)");
         let h = computed_style(&doc, by_id(&doc, "h")).expect("a style");
         assert_eq!(h.text("display"), "none");
+    }
+
+    #[test]
+    fn border_widths_follow_border_styles() {
+        let doc = doc_of(
+            "<b id=a></b><b id=b style='border-top-style: solid'></b>\
+             <b id=c style='border-style: solid; border-top-width: initial; border-left-width: 1px'></b>\
+             <b id=d style='border: dotted; border-right-style: hidden'></b>",
+        );
+        assert_eq!(initial_style().text("border-top-width"), "0px");
+        let a = computed_style(&doc, by_id(&doc, "a")).expect("a style");
+        assert_eq!(a.text("border-top-width"), "0px");
+        let b = computed_style(&doc, by_id(&doc, "b")).expect("a style");
+        assert_eq!(b.text("border-top-width"), "3px");
+        assert_eq!(b.text("border-left-width"), "0px");
+        let c = computed_style(&doc, by_id(&doc, "c")).expect("a style");
+        assert_eq!(c.text("border-top-width"), "3px");
+        assert_eq!(c.text("border-left-width"), "1px");
+        let d = computed_style(&doc, by_id(&doc, "d")).expect("a style");
+        assert_eq!(d.text("border-top-width"), "3px");
+        assert_eq!(d.text("border-right-width"), "0px");
     }
 
     #[test]
